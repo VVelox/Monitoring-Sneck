@@ -10,6 +10,7 @@ my %WriteMakefileArgs = (
 	ABSTRACT_FROM      => 'lib/Monitoring/Sneck.pm',
 	LICENSE            => 'artistic_2',
 	MIN_PERL_VERSION   => '5.006',
+	INST_SCRIPT        => 'bin',
 	CONFIGURE_REQUIRES => {
 		'ExtUtils::MakeMaker' => '0',
 	},
@@ -17,8 +18,9 @@ my %WriteMakefileArgs = (
 		'Test::More' => '0',
 	},
 	PREREQ_PM => {
-		'JSON'        => '0',
-		'File::Slurp' => '0',
+		'JSON'          => '0',
+		'File::Slurp'   => '0',
+		'Sys::Hostname' => '0',
 	},
 	dist       => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean      => { FILES    => 'Monitoring-Sneck-*' },

@@ -411,6 +411,10 @@ L<https://cpanratings.perl.org/d/Monitoring-Sneck>
 
 L<https://metacpan.org/release/Monitoring-Sneck>
 
+=item * Github
+
+l<https://github.com/VVelox/Monitoring-Sneck>
+
 =back
 
 

@@ -3,17 +3,16 @@
 ## SYNOPSIS
 
 ```
-sneck -u [B<-C> <cache file] [B<-f> <config file>] [B<-p>] [B<-i>]
+sneck -u [-C <cache file>] [-f <config file>] [-p] [-i]
 
-sneck -c [B<-C> <cache file]
+sneck -c [-C <cache file>] [-b]
 
-sneck [B<-f> <config file>] [B<-p>] [B<-i>]
+sneck [-f <config file>] [-p] [-i]
 ```
 
 ## FLAGS
 
 ```
-
 -f <config>              Config file to use.
                          Default: /usr/local/etc/sneck.conf
 
@@ -21,6 +20,8 @@ sneck [B<-f> <config file>] [B<-p>] [B<-i>]
 
 -C                       Cache file.
                          Default: /var/cache/sneck.cache
+
+-b                       base64+gzip the printing of the cache.
 
 -u                       Run and write to cache.
 
@@ -95,7 +96,7 @@ extend sneck /usr/bin/env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/us
 Then just setup a entry in like cron such as below.
 
 ```
- */5 * * * * /usr/bin/env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin  /usr/local/bin/sneck -u 2> /dev/null > /dev/null
+*/5 * * * * /usr/bin/env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin  /usr/local/bin/sneck -u 2> /dev/null > /dev/null
 ```
 
 Most likely want to run it once per polling interval.
@@ -142,4 +143,4 @@ The data section of the return hash/JSON is as below.
 
 - $hash{data}[checks}{$name}{error} :: Only present it died on a
   signal or could not be executed. Provides a brief description.
-`
+

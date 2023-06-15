@@ -9,3 +9,4 @@ t/pod-coverage.t
 t/pod.t
 bin/sneck
 README.md
+bin/.exists

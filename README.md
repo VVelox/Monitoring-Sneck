@@ -72,10 +72,10 @@ The first line creates a variable named path.
 The second is ignored as it is a comment.
 
 The third creates a check named geom_foo that calls env with and sets the PATH to the
-the variable defined on line 1 and calls check_geom_mirror.
+the variable defined on line 1 and then calls check_geom_mirror.
 
 The fourth is a example of an error that will show what will happen when you call to a
-file that does not exit.
+file that does not exist.
 
 The fifth line will be ignored as it is blank.
 
@@ -106,41 +106,67 @@ longer polling time for LibreNMS or the like when it queries it.
 
 ## RETURN HASH/JSON
 
-The data section of the return hash/JSON is as below.
+The generated JSON/hash is as below.
 
-- $hash{data}{alert} :: 0/1 boolean for if there is a aloert or not.
+- .data.alert :: 0/1 boolean for if there is a aloert or not.
 
-- $hash{data}{ok} :: Count of the number of ok checks.
+- .data.ok :: Count of the number of ok checks.
 
-- $hash{data}{warning} :: Count of the number of warning checks.
+- .data.warning :: Count of the number of warning checks.
 
-- $hash{data}{critical} :: Count of the number of critical checks.
+- .data.critical :: Count of the number of critical checks.
 
-- $hash{data}{unknown} :: Count of the number of unkown checks.
+- .data.unknown :: Count of the number of unkown checks.
 
-- $hash{data}{errored} :: Count of the number of errored checks.
+- .data.errored :: Count of the number of errored checks.
 
-- $hash{data}{alertString} :: The cumulative outputs of anything that
+- .data.alertString :: The cumulative outputs of anything that
   returned a warning, critical, or unknown.
 
-- $hash{data}{vars} :: A hash with the variables to use.
+- .data.vars :: A hash with the variables to use.
 
-- $hash{data}{time} :: Time since epoch.
+- .data.time :: Time since epoch.
 
-- $hash{data}{time} :: The hostname the check was ran on.
+- .data.time :: The hostname the check was ran on.
 
-- $hash{data}{config} :: The raw config file if told to include it.
+- .data.config :: The raw config file if told to include it.
 
-- $hash{data}[checks}{$name} :: A hash with info on the checks ran.
+For the following `$name` is the name of the check ran.
 
-- $hash{data}[checks}{$name}{check} :: The command pre-variable substitution.
+- .data.checks[].$name :: A hash with info on the checks ran.
 
-- $hash{data}[checks}{$name}{ran} :: The command ran.
+- .data.checks[].$name.check :: The command pre-variable substitution.
 
-- $hash{data}[checks}{$name}{output} :: The output of the check.
+- .data.checks[].$name.ran :: The command ran.
 
-- $hash{data}[checks}{$name}{exit} :: The exit code.
+- .data.checks[].$name.output :: The output of the check.
 
-- $hash{data}[checks}{$name}{error} :: Only present it died on a
-  signal or could not be executed. Provides a brief description.
+- .data.checks[].$name.exit :: The exit code.
 
+- .data.checks[].$name.error :: Only present it died on a signal or
+  could not be executed. Provides a brief description.
+
+## INSTALLING
+
+### FreeBSD
+
+```
+pkg install p5-JSON p5-File-Slurp p5-MIME-Base64 p5-Gzip-Faster p5-App-cpanminus
+cpanminus Monitoring::Sneck
+```
+
+### Debian
+
+```
+apt-get install zlib1g-dev cpanminus
+cpanminus Monitoring::Sneck
+```
+
+### From Src
+
+```
+perl Makefile.PL
+make
+make test
+make install
+```

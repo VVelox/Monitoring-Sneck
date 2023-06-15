@@ -7,6 +7,6 @@ t/00-load.t
 t/manifest.t
 t/pod-coverage.t
 t/pod.t
-bin/sneck
+src_bin/sneck
 README.md
 bin/.exists

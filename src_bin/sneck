@@ -2,7 +2,7 @@
 
 =head1 NAME
 
-sneck - a boopable LibreNMS JSON style SNMP extend for remotely running nagios style checks
+sneck - a boopable LibreNMS JSON style SNMP extend for remotely running nagios style checks akin to NRPE
 
 =head1 SYNOPSIS
 
@@ -23,7 +23,7 @@ please see L<Monitoring::Sneck>.
 
 The config file to use.
 
-Defaults to '/usr/local/etc/sneck.conf'.
+Default :: /usr/local/etc/sneck.conf
 
 =head2 -p
 
@@ -33,7 +33,7 @@ Pretty it in a nicely formatted format.
 
 The cache file to use.
 
-Defaults to '/var/cache/sneck.cache'.
+Default :: /var/cache/sneck.cache
 
 =head2 -u
 
@@ -46,8 +46,8 @@ this as this flag only reads/prints the cache file.
 
 =head2 -b
 
-When used with B<-c>, it gzips the contents and base64 encodes it
-prior to printing it.
+When used with B<-c>, it does optional LibreNMS style GZip+BASE64
+style compression.
 
 =head2 -i
 

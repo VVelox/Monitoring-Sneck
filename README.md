@@ -106,7 +106,7 @@ longer polling time for LibreNMS or the like when it queries it.
 
 ## RETURN HASH/JSON
 
-The generated JSON/hash is as below.
+The generated JSON/hash is as below in jpath notation.
 
 - .data.alert :: 0/1 boolean for if there is a aloert or not.
 
@@ -133,17 +133,17 @@ The generated JSON/hash is as below.
 
 For the following `$name` is the name of the check ran.
 
-- .data.checks[].$name :: A hash with info on the checks ran.
+- .data.checks.$name :: A hash with info on the checks ran.
 
-- .data.checks[].$name.check :: The command pre-variable substitution.
+- .data.checks.$name.check :: The command pre-variable substitution.
 
-- .data.checks[].$name.ran :: The command ran.
+- .data.checks.$name.ran :: The command ran.
 
-- .data.checks[].$name.output :: The output of the check.
+- .data.checks.$name.output :: The output of the check.
 
-- .data.checks[].$name.exit :: The exit code.
+- .data.checks.$name.exit :: The exit code.
 
-- .data.checks[].$name.error :: Only present it died on a signal or
+- .data.checks.$name.error :: Only present it died on a signal or
   could not be executed. Provides a brief description.
 
 ## INSTALLING

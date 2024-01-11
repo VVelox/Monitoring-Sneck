@@ -12,11 +12,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 0.2.0
+Version 0.3.0
 
 =cut
 
-our $VERSION = '0.2.0';
+our $VERSION = '0.3.0';
 
 =head1 SYNOPSIS
 
@@ -245,8 +245,7 @@ sub new {
 			}
 
 			$self->{vars}{$name} = $value;
-		}
-		elsif ( $line =~ /^[A-Za-z0-9\_]+\|/ ) {
+		} elsif ( $line =~ /^[A-Za-z0-9\_]+\|/ ) {
 
 			# we found a check to add
 			my ( $name, $check ) = split( /\|/, $line, 2 );
@@ -277,22 +276,20 @@ sub new {
 			$self->{checks}{$name} = $check;
 
 			$found_items++;
-		}
-		elsif ( $line =~ /^$/ ) {
+		} elsif ( $line =~ /^$/ ) {
 
 			# just ignore empty lines so we don't error on them
-		}
-		else {
+		} else {
 			# we did not get a match for this line
 			$self->{good}                   = 0;
 			$self->{to_return}{error}       = 1;
 			$self->{to_return}{errorString} = '"' . $line . '" is not a understood line';
 			return $self;
 		}
-	}
+	} ## end foreach my $line (@config_split)
 
 	$self;
-}
+} ## end sub new
 
 =head2 run
 
@@ -335,15 +332,13 @@ sub run {
 		# handle the exit code
 		if ( $exit_code == -1 ) {
 			$self->{to_return}{data}{checks}{$name}{error} = 'failed to execute';
-		}
-		elsif ( $exit_code & 127 ) {
+		} elsif ( $exit_code & 127 ) {
 			$self->{to_return}{data}{checks}{$name}{error} = sprintf(
 				"child died with signal %d, %s coredump\n",
 				( $exit_code & 127 ),
 				( $exit_code & 128 ) ? 'with' : 'without'
 			);
-		}
-		else {
+		} else {
 			$exit_code = $exit_code >> 8;
 		}
 		$self->{to_return}{data}{checks}{$name}{exit} = $exit_code;
@@ -351,20 +346,16 @@ sub run {
 		# anything other than 0, 1, 2, or 3 is a error
 		if ( $self->{to_return}{data}{checks}{$name}{exit} == 0 ) {
 			$self->{to_return}{data}{ok}++;
-		}
-		elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 1 ) {
+		} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 1 ) {
 			$self->{to_return}{data}{warning}++;
 			$self->{to_return}{data}{alert} = 1;
-		}
-		elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 2 ) {
+		} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 2 ) {
 			$self->{to_return}{data}{critical}++;
 			$self->{to_return}{data}{alert} = 1;
-		}
-		elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 3 ) {
+		} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 3 ) {
 			$self->{to_return}{data}{unknown}++;
 			$self->{to_return}{data}{alert} = 1;
-		}
-		else {
+		} else {
 			$self->{to_return}{data}{errored}++;
 			$self->{to_return}{data}{alert} = 1;
 		}
@@ -374,12 +365,12 @@ sub run {
 			$self->{to_return}{data}{alertString}
 				= $self->{to_return}{data}{alertString} . $self->{to_return}{data}{checks}{$name}{output} . "\n";
 		}
-	}
+	} ## end foreach my $name (@checks)
 
 	$self->{to_return}{data}{vars} = $self->{vars};
 
 	return $self->{to_return};
-}
+} ## end sub run
 
 =head1 AUTHOR
 

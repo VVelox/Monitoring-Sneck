@@ -12,11 +12,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 0.3.0
+Version 0.4.0
 
 =cut
 
-our $VERSION = '0.3.0';
+our $VERSION = '0.4.0';
 
 =head1 SYNOPSIS
 
@@ -40,6 +40,9 @@ Blank lines are ignored.
 
 Lines starting with /\#/ are comments lines.
 
+Lines matching /^[Ee][Nn][Vv]\ [A-Za-z0-9\_]+\=/ are variables. Anything before the the
+/\=/ is used as the name with everything after being the value.
+
 Lines matching /^[A-Za-z0-9\_]+\=/ are variables. Anything before the the
 /\=/ is used as the name with everything after being the value.
 
@@ -54,26 +57,30 @@ Variable names and check names may not be redefined once defined in the config.
 
 =head2 EXAMPLE CONFIG
 
-    PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+    env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
     # this is a comment
-    geom_foo|/usr/bin/env PATH=%%%PATH%%% /usr/local/libexec/nagios/check_geom mirror foo
+    GEOM_DEV=foo
+    geom_foo|/usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%
     does_not_exist|/bin/this_will_error yup... that it will
     
     does_not_exist_2|/usr/bin/env /bin/this_will_also_error
 
-The first line creates a variable named path.
+The first line sets the %ENV variable PATH.
 
 The second is ignored as it is a comment.
 
-The third creates a check named geom_foo that calls env with and sets the PATH to the
-the variable defined on line 1 and calls check_geom_mirror.
+The third sets the variable GEOM_DEV to 'foo'
 
-The fourth is a example of an error that will show what will happen when you call to a
-file that does not exit.
+The fourth creates a check named geom_foo that calls check_geom_mirror
+with the variable supplied to it being the value specified by the variable
+GEOM_DEV.
 
-The fifth line will be ignored as it is blank.
+The fith is a example of an error that will show what will happen when
+you call to a file that does not exit.
 
-The sixth is a example of another command erroring.
+The sixth line will be ignored as it is blank.
+
+The seventh is a example of another command erroring.
 
 When you run it, you will notice that errors for lines 4 and 5 are printed to STDERR.
 For this reason you should use '2> /dev/null' when calling it from snmpd or
@@ -218,7 +225,18 @@ sub new {
 	my $found_items  = 0;
 	foreach my $line (@config_split) {
 		$line =~ s/^[\ \t]*//;
-		if ( $line =~ /^[A-Za-z0-9\_]+\=/ ) {
+		if (  $line =~ /^[Ee][Nn][Vv]\ [A-Za-z0-9\_]+\=/ ) {
+			my ( $name, $value ) = split( /\=/, $line, 2 );
+
+			# make sure we have a value
+			if ( !defined($value) ) {
+				$value='';
+			}
+
+			# remove the starting bit
+			$name=~s/^[Ee][Nn][Vv]\ //;
+			$ENV{$name}=$value;
+		}elsif( $line =~ /^[A-Za-z0-9\_]+\=/ ) {
 
 			# we found a variable
 

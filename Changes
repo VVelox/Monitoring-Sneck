@@ -1,5 +1,8 @@
 Revision history for Monitoring-Sneck
 
+0.4.0   2024-01-13/16:00
+		 - add enviromental variable support
+
 0.3.0   2024-01-10/20:15
 		 - convert to Pod::Usage
 		 - convert to IO::Compress::Gzip

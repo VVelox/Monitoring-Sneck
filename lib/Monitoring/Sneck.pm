@@ -12,11 +12,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 0.4.0
+Version 0.5.0
 
 =cut
 
-our $VERSION = '0.4.0';
+our $VERSION = '0.5.0';
 
 =head1 SYNOPSIS
 
@@ -51,7 +51,7 @@ Lines matching /^[A-Za-z0-9\_]+\|/ are checks to run. Anything before the
 
 Any other sort of lines are considered an error.
 
-Variables in the checks are in the form of %%%varaible_name%%%.
+Variables in the checks are in the form of /%+varaible_name%+/.
 
 Variable names and check names may not be redefined once defined in the config.
 
@@ -337,7 +337,7 @@ sub run {
 		# put the variables in place
 		foreach my $var_name (@vars) {
 			my $value = $self->{vars}{$var_name};
-			$check =~ s/%%%$var_name%%%/$value/g;
+			$check =~ s/%+$var_name%+/$value/g;
 		}
 		$self->{to_return}{data}{checks}{$name}{ran} = $check;
 

@@ -1,5 +1,8 @@
 Revision history for Monitoring-Sneck
 
+0.5.0   2024-01-13/20:00
+		 - update some docs and rework variables from %%%var%%% to /\%+var\%+/
+
 0.4.0   2024-01-13/16:00
 		 - add enviromental variable support
 

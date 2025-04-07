@@ -405,7 +405,7 @@ sub run {
 		} else {
 			$exit_code = $exit_code >> 8;
 		}
-		$self->{to_return}{data}{checks}{$name}{exit} = $exit_code;
+		$self->{to_return}{data}{$type}{$name}{exit} = $exit_code;
 
 		# anything other than 0, 1, 2, or 3 is a error
 		if ( $type eq 'checks' ) {

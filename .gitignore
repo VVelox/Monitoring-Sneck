@@ -35,3 +35,4 @@ inc/
 /*.zip
 bin/sneck
 
+bin/*

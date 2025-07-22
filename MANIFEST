@@ -8,4 +8,4 @@ t/pod-coverage.t
 t/pod.t
 src_bin/sneck
 README.md
-bin/.exists
+

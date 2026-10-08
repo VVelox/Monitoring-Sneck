@@ -234,6 +234,34 @@ my $ok_check ="ok_check|$perl -e 'exit 0'\n";
 }
 
 #
+# -t with a YAML config
+#
+SKIP: {
+    skip( 'YAML::XS not installed', 4 ) if !eval { require YAML::XS; 1 };
+
+    my ( $fh, $cfg ) = tempfile( DIR => $dir, SUFFIX => '.yaml' );
+    print $fh "checks:\n  ok_check: /bin/true\n";
+    close $fh;
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 0,                           '-t with valid YAML config exits 0' );
+    is( $stdout,    'config OK: ' . $cfg . "\n", '-t with valid YAML config prints OK' );
+
+    ( $fh, $cfg ) = tempfile( DIR => $dir, SUFFIX => '.yml' );
+    print $fh "checks:\n  empty: ''\n  date_check: /bin/date +%Y%m%d\nbogus: 1\n";
+    close $fh;
+    ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 1, '-t with invalid YAML config exits 1' );
+    is(
+        $stdout,
+        'error: bogus: unknown top level key "bogus"' . "\n"
+            . 'error: checks.empty: check "empty" has no command' . "\n"
+            . 'warning: checks.date_check: check "date_check" uses undefined variable "Y"' . "\n"
+            . 'warning: checks.date_check: check "date_check" uses undefined variable "m"' . "\n",
+        '-t prints YAML errors and warnings with paths'
+    );
+}
+
+#
 # -v and -h
 #
 {

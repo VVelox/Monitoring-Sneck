@@ -6,6 +6,7 @@ MANIFEST			This list of files
 t/00-load.t
 t/config-parsing.t
 t/config.t
+t/config-yaml.t
 t/json.t
 t/manifest.t
 t/pod-coverage.t

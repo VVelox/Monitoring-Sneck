@@ -31,6 +31,13 @@ my %WriteMakefileArgs = (
 	clean      => { FILES    => 'Monitoring-Sneck-*' },
 	META_MERGE => {
 		"meta-spec" => { version => 2 },
+		prereqs     => {
+			runtime => {
+				recommends => {
+					'YAML::XS' => '0',
+				},
+			},
+		},
 		resources   => {
 			repository => {
 				type => 'git',

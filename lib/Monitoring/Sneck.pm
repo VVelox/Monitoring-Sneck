@@ -213,7 +213,7 @@ sub new {
 		$self->{good}                   = 0;
 		$self->{to_return}{error}       = 1;
 		$self->{to_return}{errorString} = join( '; ',
-			map { 'line ' . $_->{line} . ': ' . $_->{message} } $parsed_config->errors );
+			map { $_->{where} . ': ' . $_->{message} } $parsed_config->errors );
 		return $self;
 	}
 

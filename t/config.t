@@ -61,6 +61,13 @@ sub warning_list {
 
     $config = parse_raw("FOO=bar\n");
     ok( !defined $config->file, 'file is undef when created from raw' );
+    is( $config->format, 'sneck', 'raw defaults to the sneck format' );
+
+    $config = Monitoring::Sneck::Config->new( { file => $cfg } );
+    is( $config->format, 'sneck', 'file without a YAML extension is the sneck format' );
+
+    eval { Monitoring::Sneck::Config->new( { raw => "FOO=bar\n", format => 'ini' } ) };
+    like( $@, qr/^Unknown format "ini"/, 'new dies on unknown format' );
 }
 
 #
@@ -185,8 +192,14 @@ sub warning_list {
     my ($error) = $config->errors;
     is_deeply(
         $error,
-        { line => 1, text => "  \tbad line", message => '"bad line" is not a understood line' },
-        'error hash has line, original text, and message'
+        {
+            where   => 'line 1',
+            line    => 1,
+            path    => undef,
+            text    => "  \tbad line",
+            message => '"bad line" is not a understood line'
+        },
+        'error hash has where, line, original text, and message'
     );
 }
 

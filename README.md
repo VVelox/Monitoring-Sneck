@@ -18,6 +18,8 @@ sneck -t [-f <config file>]
 
 The config file to use.
 
+Files ending in .yaml or .yml are read as YAML, which needs YAML::XS.
+
 Default :: /usr/local/etc/sneck.conf
 
 ### -p
@@ -72,6 +74,9 @@ Warnings, such as a check using a undefined variable, do not affect the
 exit code.
 
 ## CONFIG FORMAT
+
+The sneck format is described below. Files ending in .yaml or .yml
+use the YAML format instead, described under YAML CONFIG.
 
 Each line has leading spaces and tabs removed before it is looked at. A
 trailing \r is also removed, so files with CRLF line endings work.
@@ -144,6 +149,52 @@ When you run it, you will notice that errors for lines 4 and 5 are
 printed to STDERR. For this reason you should use '2> /dev/null' when
 calling it from snmpd or '2> /dev/null > /dev/null' when calling from
 cron. 
+
+## YAML CONFIG
+
+YAML configs need YAML::XS, which is optional and only loaded when a
+YAML config is used.
+
+```
+env:
+  PATH: /sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+vars:
+  GEOM_DEV: foo
+checks:
+  geom_foo: /usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%
+  does_not_exist: /bin/this_will_error yup... that it will
+debugs:
+  routes: netstat -rn
+```
+
+- `env` :: Environment variables to set, in sorted name order. Only
+  applied if the whole config is valid.
+
+- `vars` :: Variables.
+
+- `checks` :: Checks, with the command as the value.
+
+- `debugs` :: Debug checks, with the command as the value.
+
+Any other top level key is an error. Any section may be left out or
+empty.
+
+Names, variables, and undefined variable warnings work the same as the
+sneck format. Errors and warnings point to a path, such as
+`checks.geom_foo`, as YAML::XS does not give line numbers.
+
+Values must be strings or numbers. An empty value is an empty string
+for `env` and `vars` and an error for `checks` and `debugs`.
+
+Some things to watch for.
+
+- Unquoted `true` becomes 1 and `false` becomes an empty string. Quote
+  values like those.
+
+- A value starting with `%` must be quoted, as `%` can't start a plain
+  YAML value.
+
+- Duplicate keys are not caught. YAML::XS silently keeps the last one.
 
 ## USAGE
 
@@ -241,6 +292,18 @@ cpanminus Monitoring::Sneck
 ```
 apt-get install libjson-perl libjson-xs-perl libfile-slurp-perl libproc-pid-file-perl cpanminus
 cpanminus Monitoring::Sneck
+```
+
+### YAML Support
+
+For YAML configs, also install YAML::XS.
+
+```
+# FreeBSD
+pkg install p5-YAML-LibYAML
+
+# Debian
+apt-get install libyaml-libyaml-perl
 ```
 
 ### From Src

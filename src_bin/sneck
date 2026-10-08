@@ -25,6 +25,9 @@ please see L<Monitoring::Sneck>.
 
 The config file to use.
 
+Files ending in .yaml or .yml are read as YAML, which needs YAML::XS.
+See L<Monitoring::Sneck::Config> for both formats.
+
 Default :: /usr/local/etc/sneck.conf
 
 =head2 -p
@@ -156,10 +159,10 @@ if ($test_config) {
 	}
 
 	foreach my $error ( $parsed_config->errors ) {
-		print 'error: line ' . $error->{line} . ': ' . $error->{message} . "\n";
+		print 'error: ' . $error->{where} . ': ' . $error->{message} . "\n";
 	}
 	foreach my $warning ( $parsed_config->warnings ) {
-		print 'warning: line ' . $warning->{line} . ': ' . $warning->{message} . "\n";
+		print 'warning: ' . $warning->{where} . ': ' . $warning->{message} . "\n";
 	}
 
 	if ( !$parsed_config->is_valid ) {

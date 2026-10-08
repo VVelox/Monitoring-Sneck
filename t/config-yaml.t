@@ -1,0 +1,332 @@
+#!perl
+use 5.006;
+use strict;
+use warnings;
+use Test::More;
+use File::Temp qw(tempfile);
+
+BEGIN {
+    use_ok('Monitoring::Sneck::Config') || print "Bail out!\n";
+    use_ok('Monitoring::Sneck')         || print "Bail out!\n";
+}
+
+my $perl = $^X;
+
+sub write_config {
+    my ( $content, $suffix ) = @_;
+    my ( $fh, $filename ) = tempfile( UNLINK => 1, SUFFIX => $suffix );
+    print $fh $content;
+    close $fh;
+    return $filename;
+}
+
+# Parses a YAML config string.
+sub parse_yaml {
+    my ($content) = @_;
+    return Monitoring::Sneck::Config->new( { raw => $content, format => 'yaml' } );
+}
+
+# Returns the errors as "where: message" strings for easy comparison.
+sub error_list {
+    my ($config) = @_;
+    return [ map { $_->{where} . ': ' . $_->{message} } $config->errors ];
+}
+
+# Returns the warnings as "where: message" strings for easy comparison.
+sub warning_list {
+    my ($config) = @_;
+    return [ map { $_->{where} . ': ' . $_->{message} } $config->warnings ];
+}
+
+my $have_yaml = eval { require YAML::XS; 1 };
+
+#
+# a YAML config without YAML::XS dies with a clear error
+#
+# YAML::XS is hidden by removing it from %INC and making an @INC hook die
+# for it. This runs whether or not YAML::XS is installed.
+#
+{
+    my $saved_inc = delete $INC{'YAML/XS.pm'};
+    local @INC = ( sub { die("hidden for testing\n") if $_[1] eq 'YAML/XS.pm'; return; }, @INC );
+    eval { Monitoring::Sneck::Config->new( { raw => "vars:\n  FOO: bar\n", format => 'yaml' } ) };
+    like( $@, qr/^YAML::XS is required for YAML configs/, 'YAML config without YAML::XS dies' );
+    delete $INC{'YAML/XS.pm'};
+    if ( defined($saved_inc) ) {
+        $INC{'YAML/XS.pm'} = $saved_inc;
+    }
+
+    my $config = Monitoring::Sneck::Config->new( { raw => "FOO=bar\n" } );
+    ok( $config->is_valid, 'sneck format works without YAML::XS' );
+}
+
+if ( !$have_yaml ) {
+    diag('YAML::XS not installed, skipping the rest of the YAML tests');
+    done_testing();
+    exit 0;
+}
+
+#
+# full example config
+#
+{
+    my $config = parse_yaml( "env:\n"
+            . "  ZZ_LAST: z\n"
+            . "  PATH_ISH: /bin:/usr/bin\n"
+            . "vars:\n"
+            . "  GEOM_DEV: foo\n"
+            . "  PORT: 5432\n"
+            . "checks:\n"
+            . "  geom_foo: /usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%\n"
+            . "  piped: /bin/echo a | /bin/cat\n"
+            . "debugs:\n"
+            . "  routes: netstat -rn\n"
+            . "  geom_foo: /bin/echo debug\n" );
+    ok( $config->is_valid, 'full YAML config valid' );
+    is( $config->format, 'yaml', 'format is yaml' );
+    is_deeply( $config->env, [ [ 'PATH_ISH', '/bin:/usr/bin' ], [ 'ZZ_LAST', 'z' ] ], 'env parsed and sorted by name' );
+    is_deeply( $config->vars, { GEOM_DEV => 'foo', PORT => '5432' }, 'vars parsed, numbers kept' );
+    is_deeply(
+        $config->checks,
+        { geom_foo => '/usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%', piped => '/bin/echo a | /bin/cat' },
+        'checks parsed'
+    );
+    is_deeply( $config->debugs, { routes => 'netstat -rn', geom_foo => '/bin/echo debug' }, 'debugs parsed' );
+    is_deeply( [ $config->errors ],   [], 'no errors' );
+    is_deeply( [ $config->warnings ], [], 'no warnings' );
+}
+
+#
+# format picked by file extension, and format arg overrides it
+#
+{
+    my $yaml = "vars:\n  FOO: bar\n";
+    foreach my $suffix ( '.yaml', '.yml', '.YAML', '.Yml' ) {
+        my $config = Monitoring::Sneck::Config->new( { file => write_config( $yaml, $suffix ) } );
+        is( $config->format, 'yaml', $suffix . ' file read as YAML' );
+        is( $config->vars->{FOO}, 'bar', $suffix . ' file parsed' );
+    }
+
+    my $config = Monitoring::Sneck::Config->new( { file => write_config( $yaml, '.conf' ), format => 'yaml' } );
+    is( $config->format, 'yaml', 'format arg reads .conf file as YAML' );
+
+    $config = Monitoring::Sneck::Config->new( { file => write_config( "FOO=bar\n", '.yaml' ), format => 'sneck' } );
+    is( $config->format, 'sneck', 'format arg reads .yaml file as the sneck format' );
+    is( $config->vars->{FOO}, 'bar', 'forced sneck format parsed' );
+
+    $config = Monitoring::Sneck::Config->new( { raw => $yaml } );
+    is( $config->format, 'sneck', 'raw without format arg is the sneck format' );
+}
+
+#
+# empty configs and sections
+#
+{
+    foreach my $content ( '', "# just a comment\n", "---\n", "env:\nvars:\nchecks:\ndebugs:\n" ) {
+        my $config = parse_yaml($content);
+        ok( $config->is_valid, 'valid: ' . join( '\n', split( /\n/, $content ) ) );
+        is_deeply( $config->checks, {}, 'no checks' );
+        is_deeply( $config->vars,   {}, 'no vars' );
+        is_deeply( $config->env,    [], 'no env' );
+    }
+}
+
+#
+# empty values
+#
+{
+    my $config = parse_yaml("env:\n  E1:\n  E2: ~\nvars:\n  V1:\n  V2: ''\n");
+    ok( $config->is_valid, 'empty env and var values valid' );
+    is_deeply( $config->env, [ [ 'E1', '' ], [ 'E2', '' ] ], 'empty env values are empty strings' );
+    is_deeply( $config->vars, { V1 => '', V2 => '' }, 'empty var values are empty strings' );
+
+    $config = parse_yaml("checks:\n  empty:\n  tilde: ~\n  blank: '   '\ndebugs:\n  dbg_empty: ''\n");
+    ok( !$config->is_valid, 'empty commands invalid' );
+    is_deeply(
+        error_list($config),
+        [
+            'checks.blank: check "blank" has no command',
+            'checks.empty: check "empty" has no command',
+            'checks.tilde: check "tilde" has no command',
+            'debugs.dbg_empty: debug check "dbg_empty" has no command',
+        ],
+        'every empty command reported with its path'
+    );
+}
+
+#
+# leading whitespace stripped from commands
+#
+{
+    my $config = parse_yaml("checks:\n  spaced: '   /bin/true'\n");
+    is( $config->checks->{spaced}, '/bin/true', 'leading whitespace stripped from YAML command' );
+}
+
+#
+# structural errors
+#
+{
+    my $config = parse_yaml("checks: [1\n");
+    ok( !$config->is_valid, 'YAML syntax error invalid' );
+    my @errors = $config->errors;
+    is( scalar(@errors),     1,      'one error for YAML syntax error' );
+    is( $errors[0]{where},   'YAML', 'syntax error where is YAML' );
+    ok( !defined $errors[0]{line}, 'syntax error has no line' );
+    like( $errors[0]{message}, qr/^YAML::XS::Load Error: .*line: \d+/, 'syntax error message has the YAML::XS error' );
+    unlike( $errors[0]{message}, qr/\n/, 'syntax error message is one line' );
+
+    $config = parse_yaml("---\nvars:\n  A: 1\n---\nvars:\n  B: 2\n");
+    is_deeply( error_list($config), ['YAML: only one YAML document is allowed'], 'multiple documents error' );
+
+    foreach my $content ( "- a\n- b\n", "foo|/bin/true\n", "just a string\n" ) {
+        $config = parse_yaml($content);
+        is_deeply( error_list($config), ['YAML: the top level must be a mapping'], 'top level not a mapping: ' . $content );
+    }
+
+    $config = parse_yaml("bogus: 1\nchecks:\n  ok: /bin/true\nalso_bogus:\n  a: b\n");
+    is_deeply(
+        error_list($config),
+        [ 'also_bogus: unknown top level key "also_bogus"', 'bogus: unknown top level key "bogus"' ],
+        'unknown top level keys reported'
+    );
+    is_deeply( $config->checks, { ok => '/bin/true' }, 'good sections still parsed around errors' );
+
+    $config = parse_yaml("env: string\nvars:\n  - a\nchecks: 1\ndebugs: [a]\n");
+    is_deeply(
+        error_list($config),
+        [ 'env: must be a mapping', 'vars: must be a mapping', 'checks: must be a mapping', 'debugs: must be a mapping' ],
+        'sections that are not mappings reported in section order'
+    );
+}
+
+#
+# bad names and values
+#
+{
+    my $config = parse_yaml( "vars:\n"
+            . "  'bad name': x\n"
+            . "  'bad-dash': x\n"
+            . "  list_value: [1, 2]\n"
+            . "  map_value: {a: 1}\n"
+            . "  good: x\n"
+            . "checks:\n"
+            . "  '%pct': /bin/true\n"
+            . "  list_check: [/bin/true]\n" );
+    ok( !$config->is_valid, 'bad names and values invalid' );
+    is_deeply(
+        error_list($config),
+        [
+            'vars.bad name: name "bad name" may only contain A-Z, a-z, 0-9, and _',
+            'vars.bad-dash: name "bad-dash" may only contain A-Z, a-z, 0-9, and _',
+            'vars.list_value: value must be a string or number',
+            'vars.map_value: value must be a string or number',
+            'checks.%pct: name "%pct" may only contain A-Z, a-z, 0-9, and _',
+            'checks.list_check: value must be a string or number',
+        ],
+        'every bad name and value reported'
+    );
+    is_deeply( $config->vars, { good => 'x' }, 'good var still parsed' );
+}
+
+#
+# error hash fields
+#
+{
+    my $config = parse_yaml("checks:\n  empty: ''\n");
+    my ($error) = $config->errors;
+    is_deeply(
+        $error,
+        {
+            where   => 'checks.empty',
+            line    => undef,
+            path    => 'checks.empty',
+            text    => undef,
+            message => 'check "empty" has no command'
+        },
+        'YAML error hash has where and path, no line or text'
+    );
+}
+
+#
+# booleans become 1 and empty string, as documented
+#
+{
+    my $config = parse_yaml("vars:\n  T: true\n  F: false\n  QUOTED: 'false'\n");
+    is( $config->vars->{T},      1,       'unquoted true becomes 1' );
+    is( $config->vars->{F},      '',      'unquoted false becomes empty string' );
+    is( $config->vars->{QUOTED}, 'false', 'quoted false stays false' );
+}
+
+#
+# perl objects are never created
+#
+{
+    my $config = parse_yaml("--- !!perl/hash:Some::Class\nvars:\n  FOO: bar\n");
+    ok( $config->is_valid, 'tagged top level loaded as a plain mapping' );
+    is( $config->vars->{FOO}, 'bar', 'tagged top level parsed' );
+}
+
+#
+# undefined variable warnings
+#
+{
+    my $config = parse_yaml( "vars:\n"
+            . "  DEFINED: yes\n"
+            . "checks:\n"
+            . "  uses_defined: /bin/echo %DEFINED%\n"
+            . "  date_check: /bin/date +%Y%m%d\n"
+            . "debugs:\n"
+            . "  dbg: /bin/echo %NOPE% %NOPE%\n" );
+    ok( $config->is_valid, 'undefined variables do not make YAML config invalid' );
+    is_deeply(
+        warning_list($config),
+        [
+            'checks.date_check: check "date_check" uses undefined variable "Y"',
+            'checks.date_check: check "date_check" uses undefined variable "m"',
+            'debugs.dbg: debug check "dbg" uses undefined variable "NOPE"',
+        ],
+        'undefined variables warned with paths'
+    );
+}
+
+#
+# Monitoring::Sneck with a YAML config
+#
+{
+    delete $ENV{SNECK_YAML_TEST_ENV};
+    my $cfg = write_config(
+        "env:\n"
+            . "  SNECK_YAML_TEST_ENV: from_yaml_env\n"
+            . "vars:\n"
+            . "  MYVAR: world\n"
+            . "checks:\n"
+            . "  greet: \"$perl -e 'print qq(%MYVAR%)'\"\n"
+            . "  env_check: \"$perl -e 'print \$ENV{SNECK_YAML_TEST_ENV}; exit 1'\"\n"
+            . "debugs:\n"
+            . "  dbg: \"$perl -e 'print qq(debug)'\"\n",
+        '.yaml'
+    );
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'Monitoring::Sneck accepts YAML config' );
+    is( $ENV{SNECK_YAML_TEST_ENV}, 'from_yaml_env', 'YAML env applied' );
+    my $ret = $sneck->run;
+    is( $ret->{data}{checks}{greet}{output},     'world',         'YAML check ran with variable' );
+    is( $ret->{data}{checks}{env_check}{output}, 'from_yaml_env', 'YAML check sees env' );
+    is( $ret->{data}{debugs}{dbg}{output},       'debug',         'YAML debug check ran' );
+    is( $ret->{data}{ok},                        1,               'ok counted' );
+    is( $ret->{data}{warning},                   1,               'warning counted' );
+    is_deeply( $ret->{data}{vars}, { MYVAR => 'world' }, 'YAML vars in return data' );
+
+    delete $ENV{SNECK_YAML_BAD_ENV};
+    $cfg   = write_config( "env:\n  SNECK_YAML_BAD_ENV: x\nchecks:\n  empty: ''\nbogus: 1\n", '.yml' );
+    $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 0, 'Monitoring::Sneck rejects invalid YAML config' );
+    is(
+        $sneck->{to_return}{errorString},
+        'bogus: unknown top level key "bogus"; checks.empty: check "empty" has no command',
+        'errorString uses YAML paths'
+    );
+    ok( !exists $ENV{SNECK_YAML_BAD_ENV}, 'YAML env not applied when invalid' );
+}
+
+done_testing();

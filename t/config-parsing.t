@@ -146,4 +146,123 @@ sub write_config {
     ok( !defined $sneck->{to_return}{data}{config}, 'raw config not included when include=0' );
 }
 
+#
+# leading whitespace is stripped from every line type
+#
+{
+    my $cfg = write_config( "  \tFOO=bar\n"
+            . "\t  ws_check|/bin/true\n"
+            . "   # indented comment\n"
+            . "\t%ws_dbg|/bin/true\n"
+            . "  env SNECK_WS_TEST=ws\n" );
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true with leading whitespace' );
+    is( $sneck->{vars}{FOO}, 'bar', 'indented variable parsed' );
+    is( $sneck->{checks}{ws_check}, '/bin/true', 'indented check parsed' );
+    ok( defined $sneck->{checks}{'%ws_dbg'}, 'indented debug check parsed' );
+    is( $ENV{SNECK_WS_TEST}, 'ws', 'indented env line parsed' );
+}
+
+#
+# leading whitespace is stripped from the check command
+#
+{
+    my $cfg = write_config("spaced|   /bin/true\ntabbed|\t\t/bin/false\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{checks}{spaced}, '/bin/true',  'leading spaces stripped from check command' );
+    is( $sneck->{checks}{tabbed}, '/bin/false', 'leading tabs stripped from check command' );
+}
+
+#
+# env is case insensitive and allows an empty value
+#
+{
+    my $cfg = write_config("ENV SNECK_UC_TEST=upper\nEnv SNECK_MC_TEST=mixed\nenv SNECK_EMPTY_TEST=\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true for env case variants' );
+    is( $ENV{SNECK_UC_TEST},    'upper', 'ENV line sets %ENV' );
+    is( $ENV{SNECK_MC_TEST},    'mixed', 'Env line sets %ENV' );
+    is( $ENV{SNECK_EMPTY_TEST}, '',      'env line with no value sets empty string' );
+}
+
+#
+# variable with no value is an empty string
+#
+{
+    my $cfg   = write_config("FOO=\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true for empty variable' );
+    is( $sneck->{vars}{FOO}, '', 'empty variable value is empty string' );
+}
+
+#
+# empty config file
+#
+{
+    my $cfg   = write_config('');
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true for empty file' );
+    is_deeply( $sneck->{checks}, {}, 'no checks for empty file' );
+}
+
+#
+# config with no trailing newline
+#
+{
+    my $cfg   = write_config("FOO=bar\nlast_check|/bin/true");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true with no trailing newline' );
+    is( $sneck->{checks}{last_check}, '/bin/true', 'last line parsed with no trailing newline' );
+}
+
+#
+# CRLF line endings
+#
+# This locks in the current behavior. The \r is not stripped, so it ends up in
+# values and commands, and a blank CRLF line is not understood.
+#
+{
+    my $cfg   = write_config("FOO=bar\r\ncrlf_check|/bin/true\r\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'good is true for CRLF config' );
+    is( $sneck->{vars}{FOO}, "bar\r", 'CRLF variable value keeps the \r' );
+    is( $sneck->{checks}{crlf_check}, "/bin/true\r", 'CRLF check command keeps the \r' );
+
+    $cfg   = write_config("FOO=bar\r\n\r\n");
+    $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 0, 'blank CRLF line is an error' );
+}
+
+#
+# redefined check error message
+#
+{
+    my $cfg   = write_config("mycheck|/bin/true\nmycheck|/bin/false\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    like(
+        $sneck->{to_return}{errorString},
+        qr/check "mycheck" is defined on the line "mycheck\|\/bin\/false"/,
+        'errorString names the redefined check and line'
+    );
+}
+
+#
+# a check and a debug check may share a name
+#
+{
+    my $cfg   = write_config("shared|/bin/true\n%shared|/bin/true\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    is( $sneck->{good}, 1, 'check and debug check can share a name' );
+}
+
+#
+# default config path
+#
+{
+    my $sneck = Monitoring::Sneck->new();
+    is( $sneck->{config}, '/usr/local/etc/sneck.conf', 'default config path used with no args' );
+    $sneck = Monitoring::Sneck->new( {} );
+    is( $sneck->{config}, '/usr/local/etc/sneck.conf', 'default config path used with empty hash' );
+}
+
 done_testing();

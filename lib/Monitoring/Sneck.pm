@@ -16,11 +16,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 1.4.2
+Version 1.4.3
 
 =cut
 
-our $VERSION = '1.4.2';
+our $VERSION = '1.4.3';
 
 =head1 SYNOPSIS
 
@@ -148,7 +148,9 @@ For below '$name' is the name of the check in question.
 
     - $hash{data}{checks}{$name}{output} :: The output of the check.
 
-    - $hash{data}{checks}{$name}{exit} :: The exit code.
+    - $hash{data}{checks}{$name}{exit} :: The exit code. If it died on a
+      signal, this is 128 plus the signal number. If it could not be
+      executed, this is -1.
 
     - $hash{data}{checks}{$name}{error} :: Only present it died on a
       signal or could not be executed. Provides a brief description.
@@ -165,7 +167,7 @@ For below '$name' is the name of the debug checks in question.
 
     - $hash{data}{debugs}{$name}{output} :: The output of the check.
 
-    - $hash{data}{debugs}{$name}{exit} :: The exit code.
+    - $hash{data}{debugs}{$name}{exit} :: The exit code. Same as for checks.
 
     - $hash{data}{debugs}{$name}{error} :: Only present it died on a
       signal or could not be executed. Provides a brief description.
@@ -376,6 +378,17 @@ sub run {
 		return $self->{to_return};
 	}
 
+	# reset the results so calling run more than once does not accumulate
+	$self->{to_return}{data}{ok}          = 0;
+	$self->{to_return}{data}{warning}     = 0;
+	$self->{to_return}{data}{critical}    = 0;
+	$self->{to_return}{data}{unknown}     = 0;
+	$self->{to_return}{data}{errored}     = 0;
+	$self->{to_return}{data}{alert}       = 0;
+	$self->{to_return}{data}{alertString} = '';
+	$self->{to_return}{data}{checks}      = {};
+	$self->{to_return}{data}{debugs}      = {};
+
 	# set the time it ran
 	$self->{to_return}{data}{time} = time;
 	#make sure it is a int
@@ -463,6 +476,9 @@ sub run {
 				( $exit_code & 127 ),
 				( $exit_code & 128 ) ? 'with' : 'without'
 			);
+			# use the shell convention of 128 + signal so a signal death is never
+			# mistaken for a nagios exit code of 0 to 3 and is counted as errored
+			$exit_code = 128 + ( $exit_code & 127 );
 		} else {
 			$exit_code = $exit_code >> 8;
 		}

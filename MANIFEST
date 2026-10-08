@@ -9,6 +9,7 @@ t/manifest.t
 t/pod-coverage.t
 t/pod.t
 t/run.t
+t/sneck.t
 src_bin/sneck
 README.md
 

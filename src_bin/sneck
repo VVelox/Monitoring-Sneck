@@ -37,8 +37,8 @@ Default :: /var/cache/sneck.cache
 
 A secondary cache file based on this name
 is also created. By default it is
-/var/cache/sneck.cache.snmp and is used for
-storing the compressed version.
+/var/cache/sneck.cache.snmp and always holds
+the GZip+BASE64 compressed version.
 
 =head2 -u
 
@@ -51,8 +51,8 @@ this as this flag only reads/prints the cache file.
 
 =head2 -b
 
-When used with B<-c>, it does optional LibreNMS style GZip+BASE64
-style compression.
+When used with B<-c>, print the LibreNMS style GZip+BASE64
+compressed cache instead.
 
 =head2 -i
 
@@ -182,10 +182,7 @@ gzip \$raw_json => \$compressed_string;
 my $compressed = encode_base64($compressed_string);
 $compressed =~ s/\n//g;
 $compressed = $compressed . "\n";
-my $snmp = $raw_json;
-if ( length($compressed) < length($raw_json) ) {
-	$snmp = $compressed;
-}
+my $snmp = $compressed;
 
 # non-pretty does not include a new line, so add it
 if ( !$pretty ) {

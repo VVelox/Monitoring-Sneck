@@ -182,6 +182,58 @@ my $ok_check ="ok_check|$perl -e 'exit 0'\n";
 }
 
 #
+# -t with a valid config
+#
+{
+    my $cfg = write_config($ok_check);
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 0,                        '-t with valid config exits 0' );
+    is( $stdout,    'config OK: ' . $cfg . "\n", '-t with valid config prints OK' );
+}
+
+#
+# -t with only warnings
+#
+{
+    my $cfg = write_config("date_check|/bin/date +%Y%m%d\n");
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 0, '-t with only warnings exits 0' );
+    is(
+        $stdout,
+        'warning: line 1: check "date_check" uses undefined variable "Y"' . "\n"
+            . 'warning: line 1: check "date_check" uses undefined variable "m"' . "\n"
+            . 'config OK: ' . $cfg . "\n",
+        '-t prints warnings then OK'
+    );
+}
+
+#
+# -t with errors and warnings
+#
+{
+    my $cfg = write_config("FOO=bar\nbad line\nchk|/bin/echo %NOPE%\nempty|\n");
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 1, '-t with errors exits 1' );
+    is(
+        $stdout,
+        'error: line 2: "bad line" is not a understood line' . "\n"
+            . 'error: line 4: check "empty" has no command' . "\n"
+            . 'warning: line 3: check "chk" uses undefined variable "NOPE"' . "\n",
+        '-t prints every error then warnings'
+    );
+}
+
+#
+# -t with a missing config
+#
+{
+    my $cfg = File::Spec->catfile( $dir, 'missing.conf' );
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 1, '-t with missing config exits 1' );
+    like( $stdout, qr/^error: Failed to read in the config file "\Q$cfg\E"/, '-t with missing config prints the error' );
+}
+
+#
 # -v and -h
 #
 {

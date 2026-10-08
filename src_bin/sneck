@@ -12,6 +12,8 @@ sneck -c [B<-C> <cache file] [B<-b>]
 
 sneck [B<-f> <config file>] [B<-p>] [B<-i>]
 
+sneck -t [B<-f> <config file>]
+
 =head1 DESCRIPTION
 
 For a description of the config file format and output,
@@ -70,6 +72,13 @@ Don't print the results for -u. Exit queitly.
 
 Enable locking for with -u so more than one instance can't run at a time.
 
+=head2 -t
+
+Test the config file. Prints any errors and warnings, then exits 0 if
+there are no errors and 1 if there are or the file can't be read.
+Warnings, such as a check using a undefined variable, do not affect the
+exit code.
+
 =cut
 
 use strict;
@@ -78,6 +87,7 @@ use Getopt::Long       qw( GetOptions );
 use File::Slurp        qw(read_file write_file);
 use JSON               qw(encode_json);
 use Monitoring::Sneck  ();
+use Monitoring::Sneck::Config ();
 use MIME::Base64       qw(encode_base64);
 use IO::Compress::Gzip qw(gzip);
 use Pod::Usage         qw(pod2usage);
@@ -105,6 +115,7 @@ my $compress;
 my $debug;
 my $quiet;
 my $locking;
+my $test_config;
 Getopt::Long::Configure('no_ignore_case');
 Getopt::Long::Configure('bundling');
 GetOptions(
@@ -122,6 +133,7 @@ GetOptions(
 	'd'       => \$debug,
 	'q'       => \$quiet,
 	'l'       => \$locking,
+	't'       => \$test_config,
 );
 
 # print version or help if requested
@@ -133,6 +145,29 @@ if ($version) {
 	main::VERSION_MESSAGE;
 	exit 42;
 }
+
+# test the config and exit if requested
+if ($test_config) {
+	my $parsed_config;
+	eval { $parsed_config = Monitoring::Sneck::Config->new( { file => $config_file } ); };
+	if ($@) {
+		print 'error: ' . $@;
+		exit 1;
+	}
+
+	foreach my $error ( $parsed_config->errors ) {
+		print 'error: line ' . $error->{line} . ': ' . $error->{message} . "\n";
+	}
+	foreach my $warning ( $parsed_config->warnings ) {
+		print 'warning: line ' . $warning->{line} . ': ' . $warning->{message} . "\n";
+	}
+
+	if ( !$parsed_config->is_valid ) {
+		exit 1;
+	}
+	print 'config OK: ' . $config_file . "\n";
+	exit 0;
+} ## end if ($test_config)
 
 # prints the cache and exit if requested
 if ($print_cache) {

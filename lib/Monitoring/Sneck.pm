@@ -3,12 +3,12 @@ package Monitoring::Sneck;
 use 5.006;
 use strict;
 use warnings;
-use File::Slurp   qw(read_file);
 use Sys::Hostname qw(hostname);
 use IPC::Open3    qw(open3);
 use Symbol        qw(gensym);
 use IO::Select;
 use Time::HiRes qw(time);
+use Monitoring::Sneck::Config ();
 
 =head1 NAME
 
@@ -16,11 +16,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 1.4.3
+Version 1.5.0
 
 =cut
 
-our $VERSION = '1.4.3';
+our $VERSION = '1.5.0';
 
 =head1 SYNOPSIS
 
@@ -37,62 +37,7 @@ to support the script.
 
 =head1 CONFIG FORMAT
 
-White space is always cleared from the start of lines via /^[\t ]*/ for
-each file line that is read in.
-
-Blank lines are ignored.
-
-Lines starting with /\#/ are comments lines.
-
-Lines matching /^[Ee][Nn][Vv]\ [A-Za-z0-9\_]+\=/ are variables. Anything before the the
-/\=/ is used as the name with everything after being the value.
-
-Lines matching /^[A-Za-z0-9\_]+\=/ are variables. Anything before the the
-/\=/ is used as the name with everything after being the value.
-
-Lines matching /^[A-Za-z0-9\_]+\|/ are checks to run. Anything before the
-/\|/ is the name with everything after command to run.
-
-Lines matching /^\%[A-Za-z0-9\_]+\|/ are debug check to run. Anything before the
-/\|/ is the name with everything after command to run. These will not count towards
-the any of the counts. This exists purely for debugging purposes.
-
-Any other sort of lines are considered an error.
-
-Variables in the checks are in the form of /%+varaible_name%+/.
-
-Variable names and check names may not be redefined once defined in the config.
-
-=head2 EXAMPLE CONFIG
-
-    env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
-    # this is a comment
-    GEOM_DEV=foo
-    geom_foo|/usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%
-    does_not_exist|/bin/this_will_error yup... that it will
-
-    does_not_exist_2|/usr/bin/env /bin/this_will_also_error
-
-The first line sets the %ENV variable PATH.
-
-The second is ignored as it is a comment.
-
-The third sets the variable GEOM_DEV to 'foo'
-
-The fourth creates a check named geom_foo that calls check_geom_mirror
-with the variable supplied to it being the value specified by the variable
-GEOM_DEV.
-
-The fith is a example of an error that will show what will happen when
-you call to a file that does not exit.
-
-The sixth line will be ignored as it is blank.
-
-The seventh is a example of another command erroring.
-
-When you run it, you will notice that errors for lines 4 and 5 are printed to STDERR.
-For this reason you should use '2> /dev/null' when calling it from snmpd or
-'2> /dev/null > /dev/null' when calling from cron.
+See L<Monitoring::Sneck::Config> for the config format and a example.
 
 =head1 USAGE
 
@@ -234,10 +179,9 @@ sub new {
 			},
 			version => 1,
 		},
-		checks => {},
-		vars   => {},
-		good   => 1,
-		debug  => 0,
+		parsed_config => undef,
+		good          => 1,
+		debug         => 0,
 	};
 	bless $self;
 
@@ -245,13 +189,16 @@ sub new {
 		$self->{config} = $args{config};
 	}
 
-	my $config_raw;
-	eval { $config_raw = read_file( $self->{config} ); };
+	if ( defined( $args{debug} ) ) {
+		$self->{debug} = $args{debug};
+	}
+
+	my $parsed_config;
+	eval { $parsed_config = Monitoring::Sneck::Config->new( { file => $self->{config} } ); };
 	if ($@) {
 		$self->{good}                   = 0;
 		$self->{to_return}{error}       = 1;
-		$self->{to_return}{errorString} = 'Failed to read in the config file "' . $self->{config} . '"... ' . $@;
-		$self->{checks}                 = {};
+		$self->{to_return}{errorString} = $@;
 		return $self;
 	}
 
@@ -259,97 +206,23 @@ sub new {
 	if ( defined( $args{include} )
 		&& $args{include} )
 	{
-		$self->{to_return}{data}{config} = $config_raw;
+		$self->{to_return}{data}{config} = $parsed_config->raw;
 	}
 
-	if ( defined( $args{debug} ) ) {
-		$self->{debug} = $args{debug};
+	if ( !$parsed_config->is_valid ) {
+		$self->{good}                   = 0;
+		$self->{to_return}{error}       = 1;
+		$self->{to_return}{errorString} = join( '; ',
+			map { 'line ' . $_->{line} . ': ' . $_->{message} } $parsed_config->errors );
+		return $self;
 	}
 
-	# split the file and ignore any comments
-	my @config_split = grep( !/^[\t\ ]*#/, split( /\n/, $config_raw ) );
-	my $found_items  = 0;
-	foreach my $line (@config_split) {
-		$line =~ s/^[\ \t]*//;
-		if ( $line =~ /^[Ee][Nn][Vv]\ [A-Za-z0-9\_]+\=/ ) {
-			my ( $name, $value ) = split( /\=/, $line, 2 );
+	# only touch %ENV once the whole config is known to be good
+	foreach my $env ( @{ $parsed_config->env } ) {
+		$ENV{ $env->[0] } = $env->[1];
+	}
 
-			# make sure we have a value
-			if ( !defined($value) ) {
-				$value = '';
-			}
-
-			# remove the starting bit
-			$name =~ s/^[Ee][Nn][Vv]\ //;
-			$ENV{$name} = $value;
-		} elsif ( $line =~ /^[A-Za-z0-9\_]+\=/ ) {
-
-			# we found a variable
-			my ( $name, $value ) = split( /\=/, $line, 2 );
-
-			# make sure we have a value
-			if ( !defined($value) ) {
-				$self->{good} = 0;
-				$self->{to_return}{error} = 1;
-				$self->{to_return}{errorString}
-					= '"' . $line . '" seems to be a variable, but just a variable and no value';
-				return $self;
-			}
-
-			# remove any white space from the end of the name
-			$name =~ s/[\t\ ]*$//;
-
-			# check to make sure it is not already defined
-			if ( defined( $self->{vars}{$name} ) ) {
-				$self->{good}                   = 0;
-				$self->{to_return}{error}       = 1;
-				$self->{to_return}{errorString} = 'variable "' . $name . '" is redefined on the line "' . $line . '"';
-				return $self;
-			}
-
-			$self->{vars}{$name} = $value;
-		} elsif ( $line =~ /^\%*[A-Za-z0-9\_]+\|/ ) {
-
-			# we found a check to add
-			my ( $name, $check ) = split( /\|/, $line, 2 );
-
-			# make sure we have a check
-			if ( !defined($check) ) {
-				$self->{good} = 0;
-				$self->{to_return}{error} = 1;
-				$self->{to_return}{errorString}
-					= '"' . $line . '" seems to be a check, but just contains a check name and no check';
-				return $self;
-			}
-
-			# remove any white space from the end of the name
-			$name =~ s/[\t\ ]*$//;
-
-			# check to make sure it is not already defined
-			if ( defined( $self->{checks}{$name} ) ) {
-				$self->{good}                   = 0;
-				$self->{to_return}{error}       = 1;
-				$self->{to_return}{errorString} = 'check "' . $name . '" is defined on the line "' . $line . '"';
-				return $self;
-			}
-
-			# remove any white space from the start of the check
-			$check =~ s/^[\t\ ]*//;
-
-			$self->{checks}{$name} = $check;
-
-			$found_items++;
-		} elsif ( $line =~ /^$/ ) {
-
-			# just ignore empty lines so we don't error on them
-		} else {
-			# we did not get a match for this line
-			$self->{good}                   = 0;
-			$self->{to_return}{error}       = 1;
-			$self->{to_return}{errorString} = '"' . $line . '" is not a understood line';
-			return $self;
-		}
-	} ## end foreach my $line (@config_split)
+	$self->{parsed_config} = $parsed_config;
 
 	$self;
 } ## end sub new
@@ -394,24 +267,28 @@ sub run {
 	#make sure it is a int
 	$self->{to_return}{data}{time} =~ s/\..*$//;
 
-	my @vars   = keys( %{ $self->{vars} } );
-	my @checks = sort( keys( %{ $self->{checks} } ) );
-	foreach my $name (@checks) {
+	# debugs first, then checks, each in name order
+	my $parsed_config = $self->{parsed_config};
+	my @to_run;
+	foreach my $type ( 'debugs', 'checks' ) {
+		my $commands = $parsed_config->$type;
+		foreach my $name ( sort( keys( %{$commands} ) ) ) {
+			push( @to_run, [ $type, $name, $commands->{$name} ] );
+		}
+	}
+
+	foreach my $item (@to_run) {
+		my ( $type, $name, $check ) = @{$item};
+
 		my $check_start_time = Time::HiRes::time;
 		if ( $self->{debug} ) {
 			warn( $name . ' processing started at ' . $check_start_time );
 		}
 
-		my $type = 'checks';
-		if ( $name =~ /^\%/ ) {
-			$type = 'debugs';
-		}
 		if ( $self->{debug} ) {
 			warn( $name . ' is of type ' . $type );
 		}
 
-		my $check = $self->{checks}{$name};
-		$name =~ s/^\%//;
 		$self->{to_return}{data}{$type}{$name} = { check => $check };
 
 		if ( $self->{debug} ) {
@@ -419,10 +296,7 @@ sub run {
 		}
 
 		# put the variables in place
-		foreach my $var_name (@vars) {
-			my $value = $self->{vars}{$var_name};
-			$check =~ s/%+$var_name%+/$value/g;
-		}
+		$check = $parsed_config->substitute($check);
 		$self->{to_return}{data}{$type}{$name}{ran} = $check;
 		if ( $self->{debug} ) {
 			warn( $name . ' check string post variable replacement: "' . $check . '"' );
@@ -536,9 +410,9 @@ sub run {
 		my $check_time = $check_stop_time - $check_start_time;
 		# round to the 9th place to avoid scientific notation
 		$self->{to_return}{data}{$type}{$name}{run_time} = sprintf( '%.9f', $check_time );
-	} ## end foreach my $name (@checks)
+	} ## end foreach my $item (@to_run)
 
-	$self->{to_return}{data}{vars} = $self->{vars};
+	$self->{to_return}{data}{vars} = $parsed_config->vars;
 
 	# figure out how long the run took
 	my $run_stop_time = Time::HiRes::time;

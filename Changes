@@ -1,10 +1,17 @@
 Revision history for Monitoring-Sneck
 
-1.4.3   2026-10-08/
+1.5.0   2026-10-08/
         - signal deaths now exit as 128 + signal and count as errored
         - run no longer accumulates results when called more than once
         - .snmp cache is now always gzip+base64
         - additional tests
+        - add Monitoring::Sneck::Config for parsing and validating configs
+        - config errors report every bad line with line numbers
+        - env lines only applied if the config is valid
+        - CRLF line endings now supported
+        - empty check commands are now an error
+        - %%name| is no longer accepted for debug checks
+        - add -t for testing the config
 
 1.4.2   2026-09-11/16:00
         - add in error handling for open3

@@ -3,11 +3,13 @@
 ## SYNOPSIS
 
 ```
-sneck -u [-C <cache file>] [-f <config file>] [-p] [-i]
+sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l]
 
 sneck -c [-C <cache file>] [-b]
 
 sneck [-f <config file>] [-p] [-i]
+
+sneck -t [-f <config file>]
 ```
 
 ## FLAGS
@@ -29,7 +31,7 @@ The cache file to use.
 Default :: /var/cache/sneck.cache
 
 A secondary cache file based on this name is also created. By default
-it is /var/cache/sneck.cache.snmp and is used for storing the
+it is /var/cache/sneck.cache.snmp and always holds the GZip+BASE64
 compressed version.
 
 ### -u
@@ -43,42 +45,68 @@ this as this flag only reads/prints the cache file.
 
 ### -b
 
-When used with -c, it does optional LibreNMS style GZip+BASE64
-style compression.
+When used with -c, print the LibreNMS style GZip+BASE64 compressed
+cache instead.
 
 ### -i
 
 Includes the config file used.
 
+### -d
+
+Print debugging info if called with -u.
+
+### -q
+
+Don't print the results for -u. Exit quietly.
+
+### -l
+
+Enable locking for -u so more than one instance can't run at a time.
+
+### -t
+
+Test the config file. Prints any errors and warnings, then exits 0 if
+there are no errors and 1 if there are or the file can't be read.
+Warnings, such as a check using a undefined variable, do not affect the
+exit code.
+
 ## CONFIG FORMAT
 
-White space is always cleared from the start of lines via /^[\t ]*/ for
-each file line that is read in.
+Each line has leading spaces and tabs removed before it is looked at. A
+trailing \r is also removed, so files with CRLF line endings work.
 
 Blank lines are ignored.
 
-Lines starting with /\#/ are comments lines.
+Lines starting with # are comments and are ignored.
 
-Lines matching /^[Ee][Nn][Vv]\ [A-Za-z0-9\_]+\=/ are
-variables. Anything before the the /\=/ is used as the name with
-everything after being the value.
+- `env NAME=value` :: Sets a environment variable. The `env` is case
+  insensitive. The value may be empty. These may be set more than once,
+  with the last one winning. They are only applied if the whole config
+  is valid.
 
-Lines matching /^[A-Za-z0-9\_]+\=/ are variables. Anything before the
-the /\=/ is used as the name with everything after being the value.
+- `NAME=value` :: A variable. The name is before the first =, the value
+  is everything after it. The value may be empty.
 
-Lines matching /^[A-Za-z0-9\_]+\|/ are checks to run. Anything before
-the /\|/ is the name with everything after command to run.
+- `name|command` :: A check. The command is everything after the first
+  | with leading whitespace removed. It may not be empty.
 
-Lines matching /^\%[A-Za-z0-9\_]+\|/ are debug check to run. Anything before the
-/\|/ is the name with everything after command to run. These will not count towards
-the any of the counts. This exists purely for debugging purposes.
+- `%name|command` :: A debug check. Same as a check, but not counted
+  towards any of the counts. It exists purely for debugging. The leading
+  % is not part of the name, so a check and a debug check may share a
+  name.
 
-Any other sort of lines are considered an error.
+Names are made up of `A-Z`, `a-z`, `0-9`, and `_`.
 
-Variables in the checks are in the form of /%+varaible_name%+/.
+Any other sort of line is an error. Every bad line is reported, along
+with its line number.
 
-Variable names and check names may not be redefined once defined in
-the config.
+Variables are used in commands in the form `%NAME%`. A reference to a
+variable that is not defined is left as written and produces a warning,
+as it may just be part of the command, such as `date +%Y%m%d`. Use `-t`
+to see warnings.
+
+Variable, check, and debug check names may not be redefined.
 
 ## EXAMPLE CONFIG
 
@@ -204,14 +232,14 @@ For the following `$name` is the name of the debug check ran.
 ### FreeBSD
 
 ```
-pkg install p5-JSON p5-File-Slurp p5-MIME-Base64 p5-Gzip-Faster p5-App-cpanminus
+pkg install p5-JSON p5-JSON-XS p5-File-Slurp p5-Proc-PID-File p5-App-cpanminus
 cpanminus Monitoring::Sneck
 ```
 
 ### Debian
 
 ```
-apt-get install zlib1g-dev cpanminus
+apt-get install libjson-perl libjson-xs-perl libfile-slurp-perl libproc-pid-file-perl cpanminus
 cpanminus Monitoring::Sneck
 ```
 

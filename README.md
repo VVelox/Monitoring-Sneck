@@ -3,11 +3,11 @@
 ## SYNOPSIS
 
 ```
-sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l]
+sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l] [-r]
 
 sneck -c [-C <cache file>] [-b]
 
-sneck [-f <config file>] [-p] [-i]
+sneck [-f <config file>] [-p] [-i] [-r]
 
 sneck -t [-f <config file>]
 ```
@@ -66,6 +66,19 @@ Don't print the results for -u. Exit quietly.
 
 Enable locking for -u so more than one instance can't run at a time.
 
+### -r
+
+Run any restarts whose checks failed. Without this, restarts are only
+reported as `restarts disabled`. Meant to be used with -u from cron.
+Never use it from snmpd.
+
+Restart state, used for `min_interval` and `max_retries`, is kept in the
+cache file name with `.restarts` added, so by default
+/var/cache/sneck.cache.restarts.
+
+Use -l with this to make sure two runs can't restart things at the same
+time.
+
 ### -t
 
 Test the config file. Prints any errors and warnings, then exits 0 if
@@ -101,6 +114,10 @@ Lines starting with # are comments and are ignored.
   % is not part of the name, so a check and a debug check may share a
   name.
 
+- `@name|options|command` :: A restart. Options are space separated
+  `key=value`, with `checks` and `depends` being comma separated lists.
+  See RESTARTS.
+
 Names are made up of `A-Z`, `a-z`, `0-9`, and `_`.
 
 Any other sort of line is an error. Every bad line is reported, along
@@ -111,7 +128,7 @@ variable that is not defined is left as written and produces a warning,
 as it may just be part of the command, such as `date +%Y%m%d`. Use `-t`
 to see warnings.
 
-Variable, check, and debug check names may not be redefined.
+Variable, check, debug check, and restart names may not be redefined.
 
 ## EXAMPLE CONFIG
 
@@ -176,6 +193,9 @@ debugs:
 
 - `debugs` :: Debug checks, with the command as the value.
 
+- `restarts` :: Restarts, each a mapping of options plus `command`.
+  See RESTARTS.
+
 Any other top level key is an error. Any section may be left out or
 empty.
 
@@ -194,7 +214,74 @@ Some things to watch for.
 - A value starting with `%` must be quoted, as `%` can't start a plain
   YAML value.
 
+- A value containing `: ` or ending in `:`, such as `-c 1:`, must be
+  quoted, or it is read as a mapping.
+
 - Duplicate keys are not caught. YAML::XS silently keeps the last one.
+
+## RESTARTS
+
+A restart is a command run when enough of the checks it watches fail.
+They only run with -r. Otherwise they are just reported.
+
+```
+http_check|/usr/local/libexec/nagios/check_http -H localhost
+php_check|/usr/local/libexec/nagios/check_procs -C php-fpm -c 1:
+@php_fpm|checks=php_check|/usr/sbin/service php_fpm restart
+@httpd|checks=http_check,php_check threshold=2 depends=php_fpm cascade=1 timeout=60|/usr/sbin/service apache24 restart
+```
+
+```
+restarts:
+  php_fpm:
+    command: /usr/sbin/service php_fpm restart
+    checks: [php_check]
+  httpd:
+    command: /usr/sbin/service apache24 restart
+    checks: [http_check, php_check]
+    threshold: 2
+    depends: [php_fpm]
+    cascade: true
+    timeout: 60
+```
+
+- `checks` :: Required. The checks to watch. Debug checks can't be
+  watched.
+
+- `threshold` :: How many of the watched checks must fail for it to
+  trigger. Default :: 1
+
+- `depends` :: Other restarts this one depends on. When both trigger,
+  the ones depended on run first. A depend that didn't trigger is
+  assumed fine and isn't run. If a depend runs and fails, this one is
+  skipped. Cycles are errors.
+
+- `cascade` :: If 1, this also runs when any of its depends ran without
+  failing, even if its own threshold wasn't met. Default :: 0
+
+- `ignore_unknown` :: If 0, unknown counts as failed. Default :: 1
+
+- `ignore_errored` :: If 0, errored counts as failed. This is any exit
+  other than 0 to 3, dying on a signal, or not being able to run the
+  check. Default :: 1
+
+- `min_interval` :: Minimum seconds between runs. 0 turns it off.
+  Default :: 180
+
+- `max_retries` :: How many times in a row it will run for its threshold
+  before giving up until its checks recover. 0 means always retry. Runs
+  from cascade don't count. Default :: 0
+
+- `timeout` :: Seconds to wait on the command before giving up on it.
+  On timeout its output pipes are closed and it is left running. Nothing
+  is sent to it, but if it writes again it gets SIGPIPE, or whatever it
+  does when the reader goes away. A timeout counts as failed, with an
+  exit of -1. Default :: 30
+
+Critical always counts as failed. Ok and warning never do.
+
+A restart that ran and failed sets `.data.alert` and adds a line to
+`.data.alertString`, along with any output from the command.
 
 ## USAGE
 
@@ -244,6 +331,11 @@ The generated JSON/hash is as below in jpath notation.
 
 - $hash{data}{run_time} :: How long it took to run all checks.
 
+- .data.restarted :: Count of the number of restarts ran.
+
+- .data.restart_state_error :: Only present if the restart state file
+  could not be read or written.
+
 For the following `$name` is the name of the check ran.
 
 - .data.checks.$name :: A hash with info on the checks ran.
@@ -277,6 +369,39 @@ For the following `$name` is the name of the debug check ran.
   could not be executed. Provides a brief description.
 
  - $hash{data}{checks}{$name}{run_time} :: How long it took to run the debug.
+
+For the following `$name` is the name of the restart. Every restart has
+an entry, even when restarts are disabled.
+
+- .data.restarts.$name.triggered :: 0/1 for if its threshold was met.
+
+- .data.restarts.$name.ran :: 0/1 for if it ran.
+
+- .data.restarts.$name.reason :: Why it did or didn't run. One of
+  `threshold`, `cascade from $depend`, `cooldown, $N seconds left`,
+  `max retries reached`, `skipped, dependency $depend failed`,
+  `not triggered`, or `restarts disabled`.
+
+- .data.restarts.$name.failed_checks :: The watched checks that failed.
+
+- .data.restarts.$name.threshold :: The threshold.
+
+- .data.restarts.$name.attempts :: Runs for its threshold since its
+  checks last recovered.
+
+- .data.restarts.$name.command :: The command pre-variable substitution.
+
+- .data.restarts.$name.ran_command :: The command ran. Only if it ran.
+
+- .data.restarts.$name.output :: The output. Only if it ran.
+
+- .data.restarts.$name.exit :: The exit code, or -1 if it timed out. Only if
+  it ran.
+
+- .data.restarts.$name.error :: Only present if it timed out, died on a
+  signal, or could not be executed.
+
+- .data.restarts.$name.run_time :: How long it took. Only if it ran.
 
 ## INSTALLING
 

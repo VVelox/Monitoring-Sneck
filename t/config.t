@@ -263,6 +263,189 @@ sub warning_list {
 }
 
 #
+# restarts, defaults and options
+#
+{
+    my $config = parse_raw( "a|/bin/true\nb|/bin/true\n"
+            . "\@plain|checks=a|/usr/sbin/service foo restart | /bin/cat\n"
+            . "\@full|checks=a,b threshold=2 depends=plain cascade=1 ignore_unknown=0 ignore_errored=0"
+            . " min_interval=0 max_retries=3 timeout=60|  /usr/sbin/service bar restart\n"
+            . "\@tabbed|\tchecks=b\t\ttimeout=5 |/bin/true\n" );
+    ok( $config->is_valid, 'restarts valid' ) or diag( explain( error_list($config) ) );
+    is_deeply(
+        $config->restarts,
+        {
+            plain => {
+                command        => '/usr/sbin/service foo restart | /bin/cat',
+                checks         => ['a'],
+                depends        => [],
+                threshold      => 1,
+                cascade        => 0,
+                ignore_unknown => 1,
+                ignore_errored => 1,
+                min_interval   => 180,
+                max_retries    => 0,
+                timeout        => 30,
+            },
+            full => {
+                command        => '/usr/sbin/service bar restart',
+                checks         => [ 'a', 'b' ],
+                depends        => ['plain'],
+                threshold      => 2,
+                cascade        => 1,
+                ignore_unknown => 0,
+                ignore_errored => 0,
+                min_interval   => 0,
+                max_retries    => 3,
+                timeout        => 60,
+            },
+            tabbed => {
+                command        => '/bin/true',
+                checks         => ['b'],
+                depends        => [],
+                threshold      => 1,
+                cascade        => 0,
+                ignore_unknown => 1,
+                ignore_errored => 1,
+                min_interval   => 180,
+                max_retries    => 0,
+                timeout        => 5,
+            },
+        },
+        'restarts parsed with defaults filled in, later | kept in command'
+    );
+
+    my $restarts = $config->restarts;
+    push( @{ $restarts->{full}{checks} }, 'changed' );
+    $restarts->{full}{timeout} = 1;
+    is_deeply( $config->restarts->{full}{checks}, [ 'a', 'b' ], 'restarts returns a deep copy of lists' );
+    is( $config->restarts->{full}{timeout}, 60, 'restarts returns a copy' );
+}
+
+#
+# restart errors found while parsing
+#
+{
+    my $config = parse_raw( "a|/bin/true\nb|/bin/true\n"
+            . "\@ok|checks=a|/bin/true\n"
+            . "\@ok|checks=a|/bin/true\n"
+            . "\@no_checks|threshold=1|/bin/true\n"
+            . "\@empty_checks|checks=|/bin/true\n"
+            . "\@bad_option|checks=a bogus=1|/bin/true\n"
+            . "\@not_kv|checks=a oops|/bin/true\n"
+            . "\@twice|checks=a checks=b|/bin/true\n"
+            . "\@bad_names|checks=a,,b-c depends=x.y|/bin/true\n"
+            . "\@dupe|checks=a,a|/bin/true\n"
+            . "\@bools|checks=a cascade=2 ignore_unknown=yes ignore_errored=-1|/bin/true\n"
+            . "\@numbers|checks=a threshold=0 min_interval=-1 max_retries=x timeout=0|/bin/true\n"
+            . "\@too_high|checks=a,b threshold=3|/bin/true\n"
+            . "\@no_command|checks=a|\n"
+            . "\@blank_command|checks=a|   \n"
+            . "\@one_pipe|checks=a\n" );
+    ok( !$config->is_valid, 'restart errors make config invalid' );
+    is_deeply(
+        error_list($config),
+        [
+            '4: restart "ok" is redefined',
+            '5: restart "no_checks" has no checks',
+            '6: restart "empty_checks" has no checks',
+            '7: restart "bad_option" has unknown option "bogus"',
+            '8: restart "not_kv" option "oops" is not in the form key=value',
+            '9: restart "twice" option "checks" is given more than once',
+            '10: restart "bad_names" option "checks" has the invalid name ""',
+            '10: restart "bad_names" option "checks" has the invalid name "b-c"',
+            '10: restart "bad_names" option "depends" has the invalid name "x.y"',
+            '11: restart "dupe" option "checks" lists "a" more than once',
+            '12: restart "bools" option "cascade" must be 0 or 1',
+            '12: restart "bools" option "ignore_unknown" must be 0 or 1',
+            '12: restart "bools" option "ignore_errored" must be 0 or 1',
+            '13: restart "numbers" option "max_retries" must be a whole number of at least 0',
+            '13: restart "numbers" option "min_interval" must be a whole number of at least 0',
+            '13: restart "numbers" option "threshold" must be a whole number of at least 1',
+            '13: restart "numbers" option "timeout" must be a whole number of at least 1',
+            '14: restart "too_high" threshold of 3 is more than its 2 checks',
+            '15: restart "no_command" has no command',
+            '16: restart "blank_command" has no command',
+            '17: "@one_pipe|checks=a" is not a understood line',
+        ],
+        'every restart error reported with its line'
+    );
+    is_deeply( [ sort keys %{ $config->restarts } ], ['ok'], 'only the good restart kept' );
+}
+
+#
+# restart errors found once everything is parsed
+#
+{
+    my $config = parse_raw( "a|/bin/true\n%dbg|/bin/true\n"
+            . "\@watches_missing|checks=a,nope|/bin/true\n"
+            . "\@watches_debug|checks=dbg|/bin/true\n"
+            . "\@bad_depend|checks=a depends=nope|/bin/true\n"
+            . "\@self|checks=a depends=self|/bin/true\n"
+            . "\@loop_a|checks=a depends=loop_b|/bin/true\n"
+            . "\@loop_b|checks=a depends=loop_c|/bin/true\n"
+            . "\@loop_c|checks=a depends=loop_a|/bin/true\n"
+            . "\@into_loop|checks=a depends=loop_a|/bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            '3: restart "watches_missing" watches unknown check "nope"',
+            '4: restart "watches_debug" watches unknown check "dbg", debug checks can not be watched',
+            '5: restart "bad_depend" depends on unknown restart "nope"',
+            '6: restart "self" has a dependency cycle: self -> self',
+            '7: restart "loop_a" has a dependency cycle: loop_a -> loop_b -> loop_c -> loop_a',
+            '8: restart "loop_b" has a dependency cycle: loop_b -> loop_c -> loop_a -> loop_b',
+            '9: restart "loop_c" has a dependency cycle: loop_c -> loop_a -> loop_b -> loop_c',
+        ],
+        'unknown checks, unknown depends, and cycles reported, depending on a cycle is not itself a cycle'
+    );
+}
+
+#
+# a restart with its own errors still has its references checked, and is
+# still known to restarts that depend on it
+#
+{
+    my $config = parse_raw( "a|/bin/true\n"
+            . "\@db|checks=a,nope depends=ghost timeout=0|/bin/true\n"
+            . "\@app|checks=a depends=db|/bin/true\n"
+            . "\@x|checks=a depends=y bogus=1|/bin/true\n"
+            . "\@y|checks=a depends=x|/bin/true\n"
+            . "\@not_kv|checks=a,missing oops|/bin/true\n"
+            . "\@uses_not_kv|checks=a depends=not_kv|/bin/true\n"
+            . "\@bad_again|checks=a timeout=0|/bin/true\n"
+            . "\@bad_again|checks=a|/bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            '2: restart "db" option "timeout" must be a whole number of at least 1',
+            '2: restart "db" watches unknown check "nope"',
+            '2: restart "db" depends on unknown restart "ghost"',
+            '4: restart "x" has unknown option "bogus"',
+            '4: restart "x" has a dependency cycle: x -> y -> x',
+            '5: restart "y" has a dependency cycle: y -> x -> y',
+            '6: restart "not_kv" option "oops" is not in the form key=value',
+            '6: restart "not_kv" watches unknown check "missing"',
+            '8: restart "bad_again" option "timeout" must be a whole number of at least 1',
+            '9: restart "bad_again" is redefined',
+        ],
+        'every error found in one pass, no false unknown restart errors'
+    );
+    is_deeply( [ sort keys %{ $config->restarts } ], [ 'app', 'uses_not_kv', 'y' ], 'restarts leaves out invalid ones' );
+}
+
+#
+# restarts defined before the checks they watch, and undefined variable warnings
+#
+{
+    my $config = parse_raw( "\@early|checks=late depends=later|/bin/echo %NOPE%\n"
+            . "\@later|checks=late|/bin/true\n"
+            . "late|/bin/true\n" );
+    ok( $config->is_valid, 'restarts may come before what they reference' );
+    is_deeply( warning_list($config), ['1: restart "early" uses undefined variable "NOPE"'], 'restart command warned about' );
+}
+
+#
 # substitute
 #
 {

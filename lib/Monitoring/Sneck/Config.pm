@@ -85,9 +85,16 @@ removed.
 Lines matching /^\%[A-Za-z0-9\_]+\|/ are debug checks. The leading % is
 not part of the name.
 
+Lines matching /^\@[A-Za-z0-9\_]+\|[^\|]*\|/ are restarts. The name is
+between the @ and the first |, the options are between the first and
+second |, and the command is everything after the second |, with
+leading whitespace removed. Options are separated by spaces or tabs and
+are in the form key=value. The checks and depends options are comma
+separated lists. See RESTARTS.
+
 Any other sort of line is an error.
 
-Variable, check, and debug check names may not be redefined.
+Variable, check, debug check, and restart names may not be redefined.
 
 =head3 EXAMPLE SNECK CONFIG
 
@@ -101,6 +108,9 @@ Variable, check, and debug check names may not be redefined.
 
     #includes route info
     %routes|netstat -rn
+
+    php_check|/usr/local/libexec/nagios/check_procs -C php-fpm -c 1:
+    @php_fpm|checks=php_check|/usr/sbin/service php_fpm restart
 
 The first line sets the environment variable PATH.
 
@@ -118,9 +128,18 @@ The sixth line is ignored as it is blank.
 
 The seventh is an example of another command erroring.
 
-The eighth is ignored as it is a comment.
+The eighth is ignored as it is blank.
 
-The ninth creates a debug check named routes.
+The ninth is ignored as it is a comment.
+
+The tenth creates a debug check named routes.
+
+The eleventh is ignored as it is blank.
+
+The twelfth creates a check named php_check.
+
+The thirteenth creates a restart named php_fpm that runs the command
+when php_check is critical, if restarts are enabled.
 
 When it is run, errors for the fifth and seventh lines are printed to
 STDERR. For this reason, use '2> /dev/null' when calling it from snmpd
@@ -131,7 +150,7 @@ or '2> /dev/null > /dev/null' when calling it from cron.
 This needs L<YAML::XS>, which is optional and only loaded when a YAML
 config is used.
 
-The top level is a mapping with up to four keys, each of which is a
+The top level is a mapping with up to five keys, each of which is a
 mapping of names to values.
 
     - env :: Environment variables to set. Set in sorted name order.
@@ -142,6 +161,9 @@ mapping of names to values.
 
     - debugs :: Debug checks, with the command as the value.
 
+    - restarts :: Restarts. Each is a mapping of options plus command.
+      See RESTARTS.
+
 Any other top level key is an error. Any section may be left out or
 empty. An empty file is a valid config with nothing in it.
 
@@ -151,6 +173,9 @@ and debugs.
 
 YAML::XS turns some unquoted values into something else. 'true' becomes
 1 and 'false' becomes a empty string. Quote values like those.
+
+Values starting with % or containing ': ' or ending in ':' must be quoted,
+such as '-w 80 -c 1:'.
 
 YAML::XS keeps the last of any duplicate keys without saying anything,
 so redefinitions can not be caught like they are in the sneck format.
@@ -164,8 +189,83 @@ so redefinitions can not be caught like they are in the sneck format.
     checks:
       geom_foo: /usr/local/libexec/nagios/check_geom mirror %GEOM_DEV%
       does_not_exist: /bin/this_will_error yup... that it will
+      php_check: '/usr/local/libexec/nagios/check_procs -C php-fpm -c 1:'
     debugs:
       routes: netstat -rn
+    restarts:
+      php_fpm:
+        command: /usr/sbin/service php_fpm restart
+        checks: [php_check]
+
+=head1 RESTARTS
+
+A restart is a command that is run when enough of the checks it watches
+fail. Restarts only run when asked for, via the restart option of
+L<Monitoring::Sneck> or B<-r> for sneck. Otherwise they are just
+reported.
+
+Options are as below.
+
+    - checks :: Required. The checks to watch. Debug checks can not be
+      watched.
+
+    - threshold :: How many of the watched checks must fail for it to
+      trigger. Must be between 1 and the number of checks.
+      Default :: 1
+
+    - depends :: Other restarts this one depends on. When both trigger,
+      the ones depended on run first. A depend that did not trigger is
+      assumed to be fine and is not run. If a depend runs and fails,
+      or was itself skipped for that reason, this one is skipped.
+      Dependency cycles are errors.
+      Default :: none
+
+    - cascade :: If 1, this also runs when any of its depends ran
+      without failing, even if its own threshold was not met.
+      Default :: 0
+
+    - ignore_unknown :: If 0, unknown, exit 3, counts as failed.
+      Default :: 1
+
+    - ignore_errored :: If 0, errored counts as failed. This is any
+      exit other than 0 to 3, dying on a signal, or not being able to
+      run the check.
+      Default :: 1
+
+    - min_interval :: Minimum seconds between runs of this restart. 0
+      turns it off.
+      Default :: 180
+
+    - max_retries :: How many times in a row it will run for its
+      threshold before giving up until its checks recover. 0 means
+      always retry. Runs from cascade do not count towards this.
+      Default :: 0
+
+    - timeout :: Seconds to wait on the command before giving up on it.
+      On timeout its output pipes are closed and it is left running.
+      Nothing is sent to it, but if it writes again it gets SIGPIPE, or
+      whatever it does when the reader goes away. A timeout counts as
+      failed, with a exit of -1.
+      Default :: 30
+
+Critical always counts as failed. Ok and warning never do.
+
+The 0/1 options also take true and false in YAML.
+
+Restart commands get variables put in place the same as checks. A
+restart does not wait for its output to be closed once its command has
+exited, so a daemon started by it holding stdout open is fine.
+
+    @httpd|checks=http_check,php_check threshold=2 depends=php_fpm cascade=1 timeout=60|/usr/sbin/service apache24 restart
+
+    restarts:
+      httpd:
+        command: /usr/sbin/service apache24 restart
+        checks: [http_check, php_check]
+        threshold: 2
+        depends: [php_fpm]
+        cascade: true
+        timeout: 60
 
 =head1 METHODS
 
@@ -215,6 +315,8 @@ sub new {
 		env      => [],
 		checks   => {},
 		debugs   => {},
+		restarts => {},
+		invalid_restarts => {},
 		errors   => [],
 		warnings => [],
 	};
@@ -417,6 +519,38 @@ sub debugs {
 	return { %{ $_[0]->{debugs} } };
 }
 
+=head2 restarts
+
+Returns a hash ref of the restarts, with the names as keys. Each value
+is a hash ref with every option filled in, defaults included, as below.
+This is a copy, so changing it does not change the config.
+
+    - command :: The command, before variable substitution.
+
+    - checks :: Array ref of the names of the checks watched.
+
+    - depends :: Array ref of the names of the restarts depended on.
+
+    - threshold, cascade, ignore_unknown, ignore_errored, min_interval,
+      max_retries, timeout :: As described under RESTARTS. The 0/1
+      options are always 0 or 1.
+
+    my $threshold = $config->restarts->{httpd}{threshold};
+
+=cut
+
+sub restarts {
+	my %restarts;
+	foreach my $name ( keys( %{ $_[0]->{restarts} } ) ) {
+		if ( $_[0]->{invalid_restarts}{$name} ) {
+			next;
+		}
+		my $restart = $_[0]->{restarts}{$name};
+		$restarts{$name} = { %{$restart}, checks => [ @{ $restart->{checks} } ], depends => [ @{ $restart->{depends} } ] };
+	}
+	return \%restarts;
+}
+
 =head2 substitute
 
 Takes a string, usually a check command, and returns it with the
@@ -496,11 +630,51 @@ sub _parse_sneck {
 			if ( $self->_add_command( $type, $name, $command, $location ) ) {
 				$command_locations{$type}{$name} = $location;
 			}
+		} elsif ( $line =~ /^\@([A-Za-z0-9\_]+)\|([^\|]*)\|(.*)$/ ) {
+			my ( $name, $options_string, $command ) = ( $1, $2, $3 );
+
+			if ( defined( $self->{restarts}{$name} ) ) {
+				$self->_add_problem( 'errors', $location, 'restart "' . $name . '" is redefined' );
+				next;
+			}
+
+			# options are space separated key=value, with checks and depends being comma separated lists
+			my %options;
+			my $options_good = 1;
+			foreach my $option ( split( /[\ \t]+/, $options_string ) ) {
+				if ( $option eq '' ) {
+					next;
+				}
+				if ( $option !~ /^([A-Za-z\_]+)\=(.*)$/ ) {
+					$self->_add_problem( 'errors', $location,
+						'restart "' . $name . '" option "' . $option . '" is not in the form key=value' );
+					$options_good = 0;
+					next;
+				}
+				my ( $key, $value ) = ( $1, $2 );
+				if ( exists( $options{$key} ) ) {
+					$self->_add_problem( 'errors', $location,
+						'restart "' . $name . '" option "' . $key . '" is given more than once' );
+					$options_good = 0;
+					next;
+				}
+				if ( $key eq 'checks' || $key eq 'depends' ) {
+					$value = [ split( /,/, $value, -1 ) ];
+				}
+				$options{$key} = $value;
+			} ## end foreach my $option ( split( /[\ \t]+/, $options_string ) )
+			# added even with bad options, so what it references is still checked
+			$self->_add_restart( $name, $command, \%options, $location );
+			if ( !$options_good ) {
+				$self->{invalid_restarts}{$name} = 1;
+			}
+			$command_locations{restarts}{$name} = $location;
 		} else {
 			$self->_add_problem( 'errors', $location, '"' . $line . '" is not a understood line' );
 		}
 	} ## end foreach my $text ( split( /\n/, $self->{raw} ) )
 
+	$self->_validate_restarts( $command_locations{restarts} );
 	$self->_warn_undefined_vars( \%command_locations );
 
 	# keep errors and warnings in line order
@@ -562,7 +736,7 @@ sub _parse_yaml {
 		return;
 	}
 
-	my %known_sections = ( env => 1, vars => 1, checks => 1, debugs => 1 );
+	my %known_sections = ( env => 1, vars => 1, checks => 1, debugs => 1, restarts => 1 );
 	foreach my $key ( sort( keys( %{$config} ) ) ) {
 		if ( !$known_sections{$key} ) {
 			$self->_add_problem( 'errors', { path => $key }, 'unknown top level key "' . $key . '"' );
@@ -572,7 +746,7 @@ sub _parse_yaml {
 	# where each command was defined, for undefined variable warnings
 	my %command_locations;
 
-	foreach my $section ( 'env', 'vars', 'checks', 'debugs' ) {
+	foreach my $section ( 'env', 'vars', 'checks', 'debugs', 'restarts' ) {
 		my $items = $config->{$section};
 		if ( !defined($items) ) {
 			next;
@@ -591,6 +765,22 @@ sub _parse_yaml {
 				next;
 			}
 
+			# restarts are a mapping of options, with the command being one of them
+			if ( $section eq 'restarts' ) {
+				$command_locations{restarts}{$name} = $location;
+				if ( ref($value) ne 'HASH' ) {
+					# still known, so restarts depending on it are not told it does not exist
+					$self->_add_problem( 'errors', $location, 'value must be a mapping' );
+					$self->{restarts}{$name} = { %{ $self->_restart_defaults }, command => '' };
+					$self->{invalid_restarts}{$name} = 1;
+					next;
+				}
+				my %options = %{$value};
+				my $command = delete( $options{command} );
+				$self->_add_restart( $name, $command, \%options, $location );
+				next;
+			} ## end if ( $section eq 'restarts' )
+
 			if ( ref($value) ) {
 				$self->_add_problem( 'errors', $location, 'value must be a string or number' );
 				next;
@@ -606,8 +796,9 @@ sub _parse_yaml {
 				}
 			}
 		} ## end foreach my $name ( sort( keys( %{$items} ) ) )
-	} ## end foreach my $section ( 'env', 'vars', 'checks', 'debugs' )
+	} ## end foreach my $section ( 'env', 'vars', 'checks', 'debugs', 'restarts' )
 
+	$self->_validate_restarts( $command_locations{restarts} );
 	$self->_warn_undefined_vars( \%command_locations );
 
 	return;
@@ -654,15 +845,271 @@ sub _add_command {
 	return 1;
 } ## end sub _add_command
 
-# Records a warning for each undefined variable used by each check and
-# debug check. Each variable is only warned about once per command. Used
-# by both parsers once everything is parsed, as variables may be defined
-# after the checks that use them.
+# Validates and adds a restart. Leading spaces and tabs are removed from
+# the command first. Used by both parsers. Records a error for every
+# problem found. Checks and depends are only checked for valid names here.
+# Whether they exist is checked by _validate_restarts once everything is
+# parsed.
+#
+# A restart with errors is still added, using the options that were good
+# plus defaults, and marked in $self->{invalid_restarts}. That way
+# _validate_restarts still checks what it references, and restarts that
+# depend on it are not wrongly told it does not exist. The restarts method
+# leaves invalid ones out.
 #
 # Args...
 #
-#     - command_locations :: Hash ref of 'checks' and 'debugs', each a hash
-#       ref of names to locations as taken by _add_problem.
+#     - name :: The name of the restart.
+#
+#     - command :: The command to run. For YAML this may be undef or, in
+#       error, a reference.
+#
+#     - options :: Hash ref of options. checks and depends are array refs
+#       of names. The rest are scalars. Unknown keys are errors. YAML false
+#       comes through as a empty string and is taken as 0.
+#
+#     - location :: Hash ref of where it was defined, as taken by
+#       _add_problem.
+#
+# Returns 1 if it was valid or 0 if there were any errors.
+#
+# Example...
+#
+#     $self->_add_restart( 'httpd', '/usr/sbin/service apache24 restart',
+#         { checks => [ 'http_check', 'php_check' ], threshold => 2 }, { line => 5, text => '...' } );
+#     # returns 1 and $self->{restarts}{httpd} is
+#     # { command => '/usr/sbin/service apache24 restart', checks => [ 'http_check', 'php_check' ],
+#     #   depends => [], threshold => 2, cascade => 0, ignore_unknown => 1, ignore_errored => 1,
+#     #   min_interval => 180, max_retries => 0, timeout => 30 }
+sub _add_restart {
+	my ( $self, $name, $command, $options, $location ) = @_;
+
+	my $label         = 'restart "' . $name . '"';
+	my $errors_before = scalar( @{ $self->{errors} } );
+
+	my %restart = %{ $self->_restart_defaults };
+
+	foreach my $key ( sort( keys( %{$options} ) ) ) {
+		if ( !exists( $restart{$key} ) ) {
+			$self->_add_problem( 'errors', $location, $label . ' has unknown option "' . $key . '"' );
+		}
+	}
+
+	foreach my $key ( 'checks', 'depends' ) {
+		if ( !defined( $options->{$key} ) ) {
+			next;
+		}
+		if ( ref( $options->{$key} ) ne 'ARRAY' ) {
+			$self->_add_problem( 'errors', $location, $label . ' option "' . $key . '" must be a list' );
+			next;
+		}
+		my %seen;
+		foreach my $item ( @{ $options->{$key} } ) {
+			if ( !defined($item) || ref($item) || $item !~ /^[A-Za-z0-9\_]+$/ ) {
+				my $shown = defined($item) && !ref($item) ? $item : '';
+				$self->_add_problem( 'errors', $location,
+					$label . ' option "' . $key . '" has the invalid name "' . $shown . '"' );
+				next;
+			}
+			if ( $seen{$item} ) {
+				$self->_add_problem( 'errors', $location,
+					$label . ' option "' . $key . '" lists "' . $item . '" more than once' );
+				next;
+			}
+			$seen{$item} = 1;
+			push( @{ $restart{$key} }, $item );
+		} ## end foreach my $item ( @{ $options->{$key} } )
+	} ## end foreach my $key ( 'checks', 'depends' )
+
+	if ( !defined( $options->{checks} )
+		|| ( ref( $options->{checks} ) eq 'ARRAY' && !defined( $options->{checks}[0] ) ) )
+	{
+		$self->_add_problem( 'errors', $location, $label . ' has no checks' );
+	}
+
+	foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored' ) {
+		if ( !exists( $options->{$key} ) ) {
+			next;
+		}
+		my $value = $options->{$key};
+		if ( !defined($value) || ref($value) || $value !~ /^[01]?$/ ) {
+			$self->_add_problem( 'errors', $location, $label . ' option "' . $key . '" must be 0 or 1' );
+			next;
+		}
+		$restart{$key} = $value ? 1 : 0;
+	} ## end foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored' )
+
+	my %minimums = ( threshold => 1, min_interval => 0, max_retries => 0, timeout => 1 );
+	foreach my $key ( sort( keys(%minimums) ) ) {
+		if ( !exists( $options->{$key} ) ) {
+			next;
+		}
+		my $value = $options->{$key};
+		if ( !defined($value) || ref($value) || $value !~ /^[0-9]+$/ || $value < $minimums{$key} ) {
+			$self->_add_problem( 'errors', $location,
+				$label . ' option "' . $key . '" must be a whole number of at least ' . $minimums{$key} );
+			next;
+		}
+		$restart{$key} = $value + 0;
+	} ## end foreach my $key ( sort( keys(%minimums) ) )
+
+	if ( defined( $restart{checks}[0] ) && $restart{threshold} > scalar( @{ $restart{checks} } ) ) {
+		$self->_add_problem( 'errors', $location,
+				  $label
+				. ' threshold of '
+				. $restart{threshold}
+				. ' is more than its '
+				. scalar( @{ $restart{checks} } )
+				. ' checks' );
+	}
+
+	if ( ref($command) ) {
+		$self->_add_problem( 'errors', $location, $label . ' option "command" must be a string' );
+		$command = '';
+	} else {
+		if ( !defined($command) ) {
+			$command = '';
+		}
+		$command =~ s/^[\ \t]*//;
+		if ( $command =~ /^\s*$/ ) {
+			$self->_add_problem( 'errors', $location, $label . ' has no command' );
+		}
+	}
+
+	$restart{command} = $command;
+	$self->{restarts}{$name} = \%restart;
+
+	if ( scalar( @{ $self->{errors} } ) > $errors_before ) {
+		$self->{invalid_restarts}{$name} = 1;
+		return 0;
+	}
+
+	return 1;
+} ## end sub _add_restart
+
+# Returns the default options for a restart. Used by _add_restart and for
+# restarts too broken to parse at all.
+#
+# Returns a new hash ref each time, with empty checks and depends lists and
+# the default for every other option. No command is included.
+#
+# Example...
+#
+#     my %restart = %{ $self->_restart_defaults };
+#     # $restart{threshold} is 1 and $restart{min_interval} is 180
+sub _restart_defaults {
+	return {
+		checks         => [],
+		depends        => [],
+		threshold      => 1,
+		cascade        => 0,
+		ignore_unknown => 1,
+		ignore_errored => 1,
+		min_interval   => 180,
+		max_retries    => 0,
+		timeout        => 30,
+	};
+} ## end sub _restart_defaults
+
+# Checks the restarts against the rest of the config once everything is
+# parsed. Records a error for each watched check that does not exist,
+# each depend that does not exist, and each restart that is part of a
+# dependency cycle.
+#
+# Args...
+#
+#     - restart_locations :: Hash ref of restart names to locations, as
+#       taken by _add_problem. May be undef if there are no restarts.
+#
+# Returns nothing.
+#
+# Example...
+#
+#     $self->{restarts}{a}{depends} = ['b'];
+#     $self->{restarts}{b}{depends} = ['a'];
+#     $self->_validate_restarts( { a => { line => 1, text => '...' }, b => { line => 2, text => '...' } } );
+#     # adds the errors 'restart "a" has a dependency cycle: a -> b -> a' and
+#     # 'restart "b" has a dependency cycle: b -> a -> b'
+sub _validate_restarts {
+	my ( $self, $restart_locations ) = @_;
+
+	foreach my $name ( sort( keys( %{ $self->{restarts} } ) ) ) {
+		my $restart  = $self->{restarts}{$name};
+		my $location = $restart_locations->{$name};
+
+		foreach my $check ( @{ $restart->{checks} } ) {
+			if ( !defined( $self->{checks}{$check} ) ) {
+				my $message = 'restart "' . $name . '" watches unknown check "' . $check . '"';
+				if ( defined( $self->{debugs}{$check} ) ) {
+					$message = $message . ', debug checks can not be watched';
+				}
+				$self->_add_problem( 'errors', $location, $message );
+			}
+		}
+
+		foreach my $depend ( @{ $restart->{depends} } ) {
+			if ( !defined( $self->{restarts}{$depend} ) ) {
+				$self->_add_problem( 'errors', $location,
+					'restart "' . $name . '" depends on unknown restart "' . $depend . '"' );
+			}
+		}
+
+		my $cycle = $self->_find_dependency_cycle($name);
+		if ( defined($cycle) ) {
+			$self->_add_problem( 'errors', $location,
+				'restart "' . $name . '" has a dependency cycle: ' . join( ' -> ', @{$cycle} ) );
+		}
+	} ## end foreach my $name ( sort( keys( %{ $self->{restarts} } ) ) )
+
+	return;
+} ## end sub _validate_restarts
+
+# Looks for a path through depends that leads from a restart back to
+# itself. Depends on unknown restarts are ignored. Searches breadth first,
+# so the shortest cycle is found.
+#
+# Args...
+#
+#     - start :: The name of the restart to start from.
+#
+# Returns a array ref of the names in the cycle, starting and ending with
+# start, or undef if there is no cycle.
+#
+# Example...
+#
+#     # a depends on b, b depends on c, c depends on a
+#     my $cycle = $self->_find_dependency_cycle('a');
+#     # $cycle is [ 'a', 'b', 'c', 'a' ]
+sub _find_dependency_cycle {
+	my ( $self, $start ) = @_;
+
+	my %visited;
+	my @queue = map { [ $_, [ $start, $_ ] ] } @{ $self->{restarts}{$start}{depends} };
+	while ( defined( $queue[0] ) ) {
+		my ( $current, $path ) = @{ shift(@queue) };
+		if ( $current eq $start ) {
+			return $path;
+		}
+		if ( $visited{$current} || !defined( $self->{restarts}{$current} ) ) {
+			next;
+		}
+		$visited{$current} = 1;
+		push( @queue, map { [ $_, [ @{$path}, $_ ] ] } @{ $self->{restarts}{$current}{depends} } );
+	}
+
+	return undef;
+} ## end sub _find_dependency_cycle
+
+# Records a warning for each undefined variable used by each check, debug
+# check, and restart command. Each variable is only warned about once per
+# command. Used by both parsers once everything is parsed, as variables
+# may be defined after the commands that use them.
+#
+# Args...
+#
+#     - command_locations :: Hash ref of 'checks', 'debugs', and
+#       'restarts', each a hash ref of names to locations as taken by
+#       _add_problem.
 #
 # Returns nothing.
 #
@@ -674,10 +1121,14 @@ sub _add_command {
 sub _warn_undefined_vars {
 	my ( $self, $command_locations ) = @_;
 
-	foreach my $type ( 'checks', 'debugs' ) {
+	foreach my $type ( 'checks', 'debugs', 'restarts' ) {
 		foreach my $name ( sort( keys( %{ $self->{$type} } ) ) ) {
+			my $command = $self->{$type}{$name};
+			if ( $type eq 'restarts' ) {
+				$command = $command->{command};
+			}
 			my %seen;
-			while ( $self->{$type}{$name} =~ /%+([A-Za-z0-9\_]+)(?=%)/g ) {
+			while ( $command =~ /%+([A-Za-z0-9\_]+)(?=%)/g ) {
 				my $var_name = $1;
 				if ( !defined( $self->{vars}{$var_name} ) && !$seen{$var_name} ) {
 					$seen{$var_name} = 1;
@@ -686,7 +1137,7 @@ sub _warn_undefined_vars {
 				}
 			}
 		} ## end foreach my $name ( sort( keys( %{ $self->{$type} } ) ) )
-	} ## end foreach my $type ( 'checks', 'debugs' )
+	} ## end foreach my $type ( 'checks', 'debugs', 'restarts' )
 
 	return;
 } ## end sub _warn_undefined_vars
@@ -695,9 +1146,10 @@ sub _warn_undefined_vars {
 #
 # Args...
 #
-#     - type :: Either 'checks' or 'debugs'.
+#     - type :: Either 'checks', 'debugs', or 'restarts'.
 #
-# Returns 'check' for 'checks' and 'debug check' for 'debugs'.
+# Returns 'check' for 'checks', 'debug check' for 'debugs', and 'restart'
+# for 'restarts'.
 #
 # Example...
 #
@@ -706,6 +1158,8 @@ sub _warn_undefined_vars {
 sub _type_label {
 	if ( $_[1] eq 'debugs' ) {
 		return 'debug check';
+	} elsif ( $_[1] eq 'restarts' ) {
+		return 'restart';
 	}
 	return 'check';
 }

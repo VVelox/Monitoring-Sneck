@@ -13,6 +13,9 @@ Revision history for Monitoring-Sneck
         - %%name| is no longer accepted for debug checks
         - add -t for testing the config
         - add optional YAML config support via YAML::XS for .yaml/.yml files
+        - add restarts, run via -r, with thresholds, depends, cascade,
+          cooldown, max retries, and timeouts
+        - cache files are now written atomically
 
 1.4.2   2026-09-11/16:00
         - add in error handling for open3

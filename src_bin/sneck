@@ -6,11 +6,11 @@ sneck - a boopable LibreNMS JSON style SNMP extend for remotely running nagios s
 
 =head1 SYNOPSIS
 
-sneck -u [B<-C> <cache file] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>]
+sneck -u [B<-C> <cache file] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>] [B<-r>]
 
 sneck -c [B<-C> <cache file] [B<-b>]
 
-sneck [B<-f> <config file>] [B<-p>] [B<-i>]
+sneck [B<-f> <config file>] [B<-p>] [B<-i>] [B<-r>]
 
 sneck -t [B<-f> <config file>]
 
@@ -75,6 +75,21 @@ Don't print the results for -u. Exit queitly.
 
 Enable locking for with -u so more than one instance can't run at a time.
 
+=head2 -r
+
+Run any restarts whose checks failed. Without this, restarts are only
+reported as 'restarts disabled'. Meant to be used with B<-u> from cron.
+Never use it from snmpd.
+
+Restart state, used for min_interval and max_retries, is kept in the
+cache file name with '.restarts' added, so by default
+/var/cache/sneck.cache.restarts.
+
+Use B<-l> with this to make sure two runs can't restart things at the
+same time.
+
+See L<Monitoring::Sneck::Config> for how restarts are configured.
+
 =head2 -t
 
 Test the config file. Prints any errors and warnings, then exits 0 if
@@ -119,6 +134,7 @@ my $debug;
 my $quiet;
 my $locking;
 my $test_config;
+my $restart;
 Getopt::Long::Configure('no_ignore_case');
 Getopt::Long::Configure('bundling');
 GetOptions(
@@ -137,6 +153,7 @@ GetOptions(
 	'q'       => \$quiet,
 	'l'       => \$locking,
 	't'       => \$test_config,
+	'r'       => \$restart,
 );
 
 # print version or help if requested
@@ -192,7 +209,15 @@ if ($print_cache) {
 	exit;
 } ## end if ($print_cache)
 
-my $sneck = Monitoring::Sneck->new( { config => $config_file, include => $include, debug => $debug } );
+my $sneck = Monitoring::Sneck->new(
+	{
+		config     => $config_file,
+		include    => $include,
+		debug      => $debug,
+		restart    => $restart,
+		state_file => $cache_file . '.restarts',
+	}
+);
 # -l if asked for
 if ($locking) {
 	my $alive;
@@ -233,6 +258,6 @@ if ( !$quiet ) {
 }
 
 if ($update) {
-	write_file( $cache_file,           $raw_json );
-	write_file( $cache_file . '.snmp', $snmp );
+	write_file( $cache_file,           { atomic => 1 }, $raw_json );
+	write_file( $cache_file . '.snmp', { atomic => 1 }, $snmp );
 }

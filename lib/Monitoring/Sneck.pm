@@ -8,6 +8,9 @@ use IPC::Open3    qw(open3);
 use Symbol        qw(gensym);
 use IO::Select;
 use Time::HiRes qw(time);
+use POSIX         qw(WNOHANG);
+use JSON          ();
+use File::Slurp   qw(read_file write_file);
 use Monitoring::Sneck::Config ();
 
 =head1 NAME
@@ -83,6 +86,12 @@ The data section of the return hash is as below.
 
     - $hash{data}{run_time} :: How long it took to run all checks.
 
+    - $hash{data}{restarted} :: Count of the number of restarts ran.
+
+    - $hash{data}{restart_state_error} :: Only present if the restart
+      state file could not be read or written. Restarts still run if it
+      can't be read, as if there was no state.
+
 For below '$name' is the name of the check in question.
 
     - $hash{data}{checks}{$name} :: A hash with info on the checks ran.
@@ -117,7 +126,48 @@ For below '$name' is the name of the debug checks in question.
     - $hash{data}{debugs}{$name}{error} :: Only present it died on a
       signal or could not be executed. Provides a brief description.
 
-    - $hash{data}{checks}{$name}{run_time} :: How long it took to run the debug.
+    - $hash{data}{debugs}{$name}{run_time} :: How long it took to run the debug.
+
+For below '$name' is the name of the restart in question. Every restart
+in the config has a entry, even when restarts are disabled.
+
+    - $hash{data}{restarts}{$name}{triggered} :: 0/1 for if enough of its
+      checks failed to meet its threshold.
+
+    - $hash{data}{restarts}{$name}{ran} :: 0/1 for if it ran.
+
+    - $hash{data}{restarts}{$name}{reason} :: Why it did or did not run.
+      One of 'threshold', 'cascade from $depend', 'cooldown, $N seconds
+      left', 'max retries reached', 'skipped, dependency $depend failed',
+      'not triggered', or 'restarts disabled'.
+
+    - $hash{data}{restarts}{$name}{failed_checks} :: Array of the watched
+      checks that counted as failed.
+
+    - $hash{data}{restarts}{$name}{threshold} :: The threshold.
+
+    - $hash{data}{restarts}{$name}{attempts} :: Runs for its threshold
+      since its checks last recovered.
+
+    - $hash{data}{restarts}{$name}{command} :: The command pre-variable
+      substitution.
+
+The rest are only present if it ran.
+
+    - $hash{data}{restarts}{$name}{ran_command} :: The command ran.
+
+    - $hash{data}{restarts}{$name}{output} :: The output of the command.
+
+    - $hash{data}{restarts}{$name}{exit} :: The exit code. Same as for
+      checks, plus -1 if it timed out.
+
+    - $hash{data}{restarts}{$name}{error} :: Only present if it timed
+      out, died on a signal, or could not be executed.
+
+    - $hash{data}{restarts}{$name}{run_time} :: How long it took to run.
+
+A restart that ran and failed, including timing out, sets alert and adds
+a line to alertString along with any output from the command.
 
 =head1 METHODS
 
@@ -141,9 +191,15 @@ are working).
 If 'debug' is true, when run is called, debugging info will be
 printed.
 
+If 'restart' is true, restarts whose checks failed are run. Otherwise
+they are only reported. Never enable this for something polled by snmpd.
+
+'state_file' is where restart state, used for min_interval and
+max_retries, is kept. Default :: /var/cache/sneck.cache.restarts
+
     my $sneck;
     eval{
-        $sneck=Monitoring::Sneck->new({config=>$file, include=>0, debug=>0});
+        $sneck=Monitoring::Sneck->new({config=>$file, include=>0, debug=>0, restart=>0});
     };
     if ($@){
         die($@);
@@ -176,12 +232,16 @@ sub new {
 				alertString => '',
 				checks      => {},
 				debugs      => {},
+				restarts    => {},
+				restarted   => 0,
 			},
 			version => 1,
 		},
 		parsed_config => undef,
 		good          => 1,
 		debug         => 0,
+		restart       => 0,
+		state_file    => '/var/cache/sneck.cache.restarts',
 	};
 	bless $self;
 
@@ -191,6 +251,14 @@ sub new {
 
 	if ( defined( $args{debug} ) ) {
 		$self->{debug} = $args{debug};
+	}
+
+	if ( defined( $args{restart} ) ) {
+		$self->{restart} = $args{restart};
+	}
+
+	if ( defined( $args{state_file} ) ) {
+		$self->{state_file} = $args{state_file};
 	}
 
 	my $parsed_config;
@@ -261,6 +329,9 @@ sub run {
 	$self->{to_return}{data}{alertString} = '';
 	$self->{to_return}{data}{checks}      = {};
 	$self->{to_return}{data}{debugs}      = {};
+	$self->{to_return}{data}{restarts}    = {};
+	$self->{to_return}{data}{restarted}   = 0;
+	delete( $self->{to_return}{data}{restart_state_error} );
 
 	# set the time it ran
 	$self->{to_return}{data}{time} = time;
@@ -412,6 +483,8 @@ sub run {
 		$self->{to_return}{data}{$type}{$name}{run_time} = sprintf( '%.9f', $check_time );
 	} ## end foreach my $item (@to_run)
 
+	$self->_handle_restarts;
+
 	$self->{to_return}{data}{vars} = $parsed_config->vars;
 
 	# figure out how long the run took
@@ -433,6 +506,461 @@ sub run {
 	}
 	return $self->{to_return};
 } ## end sub run
+
+# Works out which restarts triggered and, if restarts are enabled, runs
+# them. Called by run after all checks have run. Takes no args and returns
+# nothing. Results go in $self->{to_return}{data}{restarts} and
+# $self->{to_return}{data}{restarted}, and failures set alert and add to
+# alertString.
+#
+# Restarts run in dependency order. A restart runs if its threshold was
+# met, or if cascade is set and one of its depends ran without failing.
+# Before running, it is skipped if a depend failed or was itself skipped
+# for that reason, and held back by min_interval and, for threshold
+# triggered runs, max_retries. State for those two is kept in the state
+# file.
+#
+# Example...
+#
+#     # http_check exited 2 and httpd watches it with the default threshold of 1
+#     $self->_handle_restarts;
+#     # $self->{to_return}{data}{restarts}{httpd} is
+#     # { triggered => 1, ran => 1, reason => 'threshold', failed_checks => ['http_check'],
+#     #   threshold => 1, attempts => 1, command => '...', ran_command => '...',
+#     #   output => '...', exit => 0, run_time => '1.234567890' }
+sub _handle_restarts {
+	my $self = $_[0];
+
+	my $data     = $self->{to_return}{data};
+	my $restarts = $self->{parsed_config}->restarts;
+	my @names    = sort( keys( %{$restarts} ) );
+	if ( !defined( $names[0] ) ) {
+		return;
+	}
+
+	foreach my $name (@names) {
+		my $restart       = $restarts->{$name};
+		my @failed_checks = grep { $self->_check_failed( $data->{checks}{$_}{exit}, $restart ) } @{ $restart->{checks} };
+		$data->{restarts}{$name} = {
+			triggered     => scalar(@failed_checks) >= $restart->{threshold} ? 1 : 0,
+			ran           => 0,
+			reason        => 'not triggered',
+			failed_checks => \@failed_checks,
+			threshold     => $restart->{threshold},
+			attempts      => 0,
+			command       => $restart->{command},
+		};
+	} ## end foreach my $name (@names)
+
+	if ( !$self->{restart} ) {
+		foreach my $name (@names) {
+			$data->{restarts}{$name}{reason} = 'restarts disabled';
+		}
+		return;
+	}
+
+	my ( $state, $state_error ) = $self->_read_restart_state;
+	my $now = int(time);
+
+	# 'ok' or 'failed' for those that ran, 'skipped' for those skipped because a depend failed
+	my %status;
+	foreach my $name ( $self->_restart_order($restarts) ) {
+		my $restart = $restarts->{$name};
+		my $result  = $data->{restarts}{$name};
+		if ( !defined( $state->{$name} ) ) {
+			$state->{$name} = { last_run => 0, attempts => 0 };
+		}
+		my $state_item = $state->{$name};
+
+		# the checks recovered, so start counting attempts again
+		if ( !$result->{triggered} ) {
+			$state_item->{attempts} = 0;
+		}
+
+		my $run_reason;
+		if ( $result->{triggered} ) {
+			$run_reason = 'threshold';
+		} elsif ( $restart->{cascade} ) {
+			my ($cascade_from) = grep { defined( $status{$_} ) && $status{$_} eq 'ok' } @{ $restart->{depends} };
+			if ( defined($cascade_from) ) {
+				$run_reason = 'cascade from ' . $cascade_from;
+			}
+		}
+
+		if ( defined($run_reason) ) {
+			my ($failed_depend)
+				= grep { defined( $status{$_} ) && ( $status{$_} eq 'failed' || $status{$_} eq 'skipped' ) }
+				@{ $restart->{depends} };
+			my $since_last = $now - $state_item->{last_run};
+			if ( defined($failed_depend) ) {
+				$result->{reason} = 'skipped, dependency ' . $failed_depend . ' failed';
+				$status{$name} = 'skipped';
+			} elsif ( $restart->{min_interval} > 0
+				&& $since_last >= 0
+				&& $since_last < $restart->{min_interval} )
+			{
+				$result->{reason} = 'cooldown, ' . ( $restart->{min_interval} - $since_last ) . ' seconds left';
+			} elsif ( $run_reason eq 'threshold'
+				&& $restart->{max_retries} > 0
+				&& $state_item->{attempts} >= $restart->{max_retries} )
+			{
+				$result->{reason} = 'max retries reached';
+			} else {
+				$self->_run_restart( $name, $restart, $result, $run_reason );
+				$state_item->{last_run} = $now;
+				if ( $run_reason eq 'threshold' ) {
+					$state_item->{attempts}++;
+				}
+				$status{$name} = defined( $result->{error} ) || $result->{exit} != 0 ? 'failed' : 'ok';
+			}
+		} ## end if ( defined($run_reason) )
+
+		$result->{attempts} = $state_item->{attempts};
+	} ## end foreach my $name ( $self->_restart_order($restarts) )
+
+	# forget restarts no longer in the config
+	foreach my $name ( keys( %{$state} ) ) {
+		if ( !defined( $restarts->{$name} ) ) {
+			delete( $state->{$name} );
+		}
+	}
+
+	my $write_error = $self->_write_restart_state($state);
+	my @state_errors = grep { defined($_) } ( $state_error, $write_error );
+	if ( defined( $state_errors[0] ) ) {
+		$data->{restart_state_error} = join( '; ', @state_errors );
+	}
+
+	return;
+} ## end sub _handle_restarts
+
+# Runs a single restart and records the results. Used by _handle_restarts.
+# A failed restart sets alert and adds a line to alertString, along with
+# any output from the command.
+#
+# Args...
+#
+#     - name :: The name of the restart.
+#
+#     - restart :: Hash ref of the restart as returned by the restarts
+#       method of Monitoring::Sneck::Config.
+#
+#     - result :: Hash ref of the restart's entry in data.restarts, which
+#       is filled in with ran, reason, ran_command, output, exit, error if
+#       any, and run_time.
+#
+#     - reason :: Why it is running, either 'threshold' or
+#       'cascade from $name'.
+#
+# Returns nothing.
+#
+# Example...
+#
+#     $self->_run_restart( 'httpd', $restarts->{httpd}, $data->{restarts}{httpd}, 'threshold' );
+#     # $data->{restarts}{httpd}{ran} is 1 and $data->{restarted} went up by 1
+sub _run_restart {
+	my ( $self, $name, $restart, $result, $reason ) = @_;
+
+	my $start_time  = Time::HiRes::time;
+	my $ran_command = $self->{parsed_config}->substitute( $restart->{command} );
+	if ( $self->{debug} ) {
+		warn( 'restart ' . $name . ' running for ' . $reason . ': "' . $ran_command . '"' );
+	}
+
+	my $command_result = $self->_run_restart_command( $ran_command, $restart->{timeout} );
+
+	$result->{ran}         = 1;
+	$result->{reason}      = $reason;
+	$result->{ran_command} = $ran_command;
+	$result->{output}      = $command_result->{output};
+	$result->{exit}        = $command_result->{exit};
+	if ( defined( $command_result->{error} ) ) {
+		$result->{error} = $command_result->{error};
+	}
+	$result->{run_time} = sprintf( '%.9f', Time::HiRes::time - $start_time );
+	$self->{to_return}{data}{restarted}++;
+
+	if ( defined( $result->{error} ) || $result->{exit} != 0 ) {
+		my $why = defined( $result->{error} ) ? $result->{error} : 'exit ' . $result->{exit};
+		if ( $result->{output} ne '' ) {
+			$why = $why . ': ' . $result->{output};
+		}
+		$self->{to_return}{data}{alert} = 1;
+		$self->{to_return}{data}{alertString}
+			= $self->{to_return}{data}{alertString} . 'restart "' . $name . '" failed, ' . $why . "\n";
+	}
+
+	if ( $self->{debug} ) {
+		warn( 'restart ' . $name . ' exit code is ' . $result->{exit} );
+	}
+
+	return;
+} ## end sub _run_restart
+
+# Runs a restart command with a timeout and returns its results.
+#
+# The command is run via open3, the same as checks. Output from stdout and
+# stderr is collected until the command exits. It does not wait for the
+# pipes to close, as a daemon started by the command may keep them open.
+#
+# On timeout, the pipes are closed and the command is left running. Nothing
+# is sent to it. If it writes again it gets SIGPIPE, or whatever it does to
+# handle the reader going away. Its exit code is never collected.
+#
+# Args...
+#
+#     - command :: The command to run, after variable substitution.
+#
+#     - timeout :: Seconds to wait before giving up on it.
+#
+# Returns a hash ref as below.
+#
+#     - output :: stdout and stderr, with the final newline removed. On
+#       timeout, whatever came in before it.
+#
+#     - exit :: The exit code. 128 plus the signal number if it died on a
+#       signal. -1 if it timed out or could not be executed.
+#
+#     - error :: Only present if it timed out, died on a signal, or could
+#       not be executed.
+#
+# Example...
+#
+#     my $result = $self->_run_restart_command( '/usr/sbin/service apache24 restart', 30 );
+#     # $result is { output => 'Performing sanity check...', exit => 0 }
+#
+#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1 );
+#     # $result is { output => '', exit => -1, error => 'timed out after 1 seconds' }
+sub _run_restart_command {
+	my ( $self, $command, $timeout ) = @_;
+
+	my %result = ( output => '', exit => -1 );
+	my $wait_status;
+	eval {
+		my $pid = open3( my $std_in, my $std_out, my $std_err = gensym, $command );
+		close($std_in);
+
+		my $select   = IO::Select->new( $std_out, $std_err );
+		my $deadline = Time::HiRes::time + $timeout;
+		while ( !defined($wait_status) ) {
+			my $remaining = $deadline - Time::HiRes::time;
+			if ( $remaining <= 0 ) {
+				last;
+			}
+
+			# wake up at least every 0.1 seconds to see if it has exited
+			my $wait = $remaining < 0.1 ? $remaining : 0.1;
+			if ( $select->count ) {
+				foreach my $handle ( $select->can_read($wait) ) {
+					if ( sysread( $handle, my $buffer, 4096 ) ) {
+						$result{output} = $result{output} . $buffer;
+					} else {
+						$select->remove($handle);
+					}
+				}
+			} else {
+				select( undef, undef, undef, $wait );
+			}
+
+			if ( waitpid( $pid, WNOHANG ) == $pid ) {
+				$wait_status = $?;
+			}
+		} ## end while ( !defined($wait_status) )
+
+		# grab anything left that is ready now, without waiting on pipes held open by others
+		if ( defined($wait_status) ) {
+			my $drain_deadline = Time::HiRes::time + 1;
+			while ( $select->count && Time::HiRes::time < $drain_deadline ) {
+				my @ready = $select->can_read(0);
+				if ( !defined( $ready[0] ) ) {
+					last;
+				}
+				foreach my $handle (@ready) {
+					if ( sysread( $handle, my $buffer, 4096 ) ) {
+						$result{output} = $result{output} . $buffer;
+					} else {
+						$select->remove($handle);
+					}
+				}
+			} ## end while ( $select->count && Time::HiRes::time < $drain_deadline )
+		} ## end if ( defined($wait_status) )
+
+		close($std_out);
+		close($std_err);
+	};
+	if ($@) {
+		$result{output} = $@;
+		$result{error}  = 'failed to execute';
+		chomp( $result{output} );
+		return \%result;
+	}
+
+	chomp( $result{output} );
+	if ( !defined($wait_status) ) {
+		$result{error} = 'timed out after ' . $timeout . ' seconds';
+	} elsif ( $wait_status & 127 ) {
+		$result{exit}  = 128 + ( $wait_status & 127 );
+		$result{error} = 'child died with signal ' . ( $wait_status & 127 );
+	} else {
+		$result{exit} = $wait_status >> 8;
+	}
+
+	return \%result;
+} ## end sub _run_restart_command
+
+
+# Decides if a check result counts as failed for a restart. Critical
+# always does. Unknown and errored do if the restart does not ignore them.
+# Ok and warning never do.
+#
+# Args...
+#
+#     - exit :: The exit code of the check, as stored in data.checks.
+#
+#     - restart :: Hash ref of the restart as returned by the restarts
+#       method of Monitoring::Sneck::Config.
+#
+# Returns 1 if failed, otherwise 0.
+#
+# Example...
+#
+#     $self->_check_failed( 2, $restart );    # 1
+#     $self->_check_failed( 3, { ignore_unknown => 1, ... } );    # 0
+#     $self->_check_failed( 3, { ignore_unknown => 0, ... } );    # 1
+sub _check_failed {
+	my ( $self, $exit, $restart ) = @_;
+
+	if ( !defined($exit) || $exit == 0 || $exit == 1 ) {
+		return 0;
+	} elsif ( $exit == 2 ) {
+		return 1;
+	} elsif ( $exit == 3 ) {
+		return $restart->{ignore_unknown} ? 0 : 1;
+	}
+	return $restart->{ignore_errored} ? 0 : 1;
+} ## end sub _check_failed
+
+# Sorts restarts so every restart comes after the ones it depends on.
+# Restarts with nothing left to wait on are taken in name order. The
+# config has already been checked for cycles.
+#
+# Args...
+#
+#     - restarts :: Hash ref as returned by the restarts method of
+#       Monitoring::Sneck::Config.
+#
+# Returns a list of restart names.
+#
+# Example...
+#
+#     # a_app depends on z_db
+#     my @order = $self->_restart_order($restarts);
+#     # @order is ( 'z_db', 'a_app' )
+sub _restart_order {
+	my ( $self, $restarts ) = @_;
+
+	my %waiting_on;
+	my %dependents;
+	foreach my $name ( keys( %{$restarts} ) ) {
+		$waiting_on{$name} = scalar( @{ $restarts->{$name}{depends} } );
+		foreach my $depend ( @{ $restarts->{$name}{depends} } ) {
+			push( @{ $dependents{$depend} }, $name );
+		}
+	}
+
+	my @order;
+	my @ready = sort( grep { $waiting_on{$_} == 0 } keys(%waiting_on) );
+	while ( defined( $ready[0] ) ) {
+		my $name = shift(@ready);
+		push( @order, $name );
+		foreach my $dependent ( @{ $dependents{$name} || [] } ) {
+			$waiting_on{$dependent}--;
+			if ( $waiting_on{$dependent} == 0 ) {
+				@ready = sort( @ready, $dependent );
+			}
+		}
+	} ## end while ( defined( $ready[0] ) )
+
+	return @order;
+} ## end sub _restart_order
+
+# Reads the restart state file. A missing file is a empty state and not a
+# error. A file that can not be read or parsed is also used as a empty
+# state, so restarts still happen, but a error is returned for
+# data.restart_state_error. Entries that are not in the expected form are
+# dropped.
+#
+# Returns a hash ref of restart names to hash refs of last_run, epoch
+# seconds of the last time it ran, and attempts, threshold triggered runs
+# since its checks last recovered. Also returns a error string or undef.
+#
+# Example...
+#
+#     my ( $state, $error ) = $self->_read_restart_state;
+#     # $state is { httpd => { last_run => 1791491419, attempts => 2 } } and $error is undef
+sub _read_restart_state {
+	my $self = $_[0];
+
+	my $file = $self->{state_file};
+	if ( !-e $file ) {
+		return ( {}, undef );
+	}
+
+	my $decoded;
+	eval {
+		$decoded = JSON->new->decode( read_file($file) );
+	};
+	if ($@) {
+		my $error = $@;
+		chomp($error);
+		return ( {}, 'failed to read restart state file "' . $file . '"... ' . $error );
+	}
+	if ( ref($decoded) ne 'HASH' || ref( $decoded->{restarts} ) ne 'HASH' ) {
+		return ( {}, 'restart state file "' . $file . '" is not in the expected format' );
+	}
+
+	my %state;
+	foreach my $name ( keys( %{ $decoded->{restarts} } ) ) {
+		my $item = $decoded->{restarts}{$name};
+		if (   ref($item) eq 'HASH'
+			&& defined( $item->{last_run} )
+			&& $item->{last_run} =~ /^[0-9]+$/
+			&& defined( $item->{attempts} )
+			&& $item->{attempts} =~ /^[0-9]+$/ )
+		{
+			$state{$name} = { last_run => $item->{last_run} + 0, attempts => $item->{attempts} + 0 };
+		}
+	} ## end foreach my $name ( keys( %{ $decoded->{restarts} } ) )
+
+	return ( \%state, undef );
+} ## end sub _read_restart_state
+
+# Writes the restart state file. It is written atomically via File::Slurp,
+# so a crash never leaves a half written file.
+#
+# Args...
+#
+#     - state :: Hash ref as returned by _read_restart_state.
+#
+# Returns undef on success or a error string.
+#
+# Example...
+#
+#     my $error = $self->_write_restart_state( { httpd => { last_run => 1791491419, attempts => 1 } } );
+#     # writes {"restarts":{"httpd":{"attempts":1,"last_run":1791491419}}}
+sub _write_restart_state {
+	my ( $self, $state ) = @_;
+
+	my $file = $self->{state_file};
+	eval { write_file( $file, { atomic => 1 }, JSON->new->canonical(1)->encode( { restarts => $state } ) . "\n" ); };
+	if ($@) {
+		my $error = $@;
+		chomp($error);
+		return 'failed to write restart state file "' . $file . '"... ' . $error;
+	}
+
+	return undef;
+} ## end sub _write_restart_state
 
 =head1 AUTHOR
 

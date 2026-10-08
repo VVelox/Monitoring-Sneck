@@ -137,6 +137,32 @@ my $ok_check ="ok_check|$perl -e 'exit 0'\n";
 }
 
 #
+# cache files are written atomically, keeping their mode and leaving no temp files
+#
+{
+    my $cache_dir = tempdir( DIR => $dir );
+    my $cfg       = write_config($ok_check);
+    my $cache     = File::Spec->catfile( $cache_dir, 'atomic.cache' );
+
+    run_sneck( '-u', '-f', $cfg, '-C', $cache );
+    my $default_mode = 0666 & ~umask;
+    is( ( stat($cache) )[2] & 07777,             $default_mode, 'new cache file gets the default mode' );
+    is( ( stat( $cache . '.snmp' ) )[2] & 07777, $default_mode, 'new .snmp cache file gets the default mode' );
+
+    chmod( 0640, $cache, $cache . '.snmp' );
+    my ( $stdout, $exit_code ) = run_sneck( '-u', '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0, 'rewriting the cache exits 0' );
+    is( ( stat($cache) )[2] & 07777,             0640, 'rewritten cache file keeps its mode' );
+    is( ( stat( $cache . '.snmp' ) )[2] & 07777, 0640, 'rewritten .snmp cache file keeps its mode' );
+    is( slurp($cache), $stdout, 'rewritten cache file holds the new results' );
+
+    opendir( my $dh, $cache_dir ) or die($!);
+    my @files = sort grep { !/^\.\.?$/ } readdir($dh);
+    closedir($dh);
+    is_deeply( \@files, [ 'atomic.cache', 'atomic.cache.snmp' ], 'no temp files left behind' );
+}
+
+#
 # -q prints nothing but still updates the cache
 #
 {
@@ -259,6 +285,32 @@ SKIP: {
             . 'warning: checks.date_check: check "date_check" uses undefined variable "m"' . "\n",
         '-t prints YAML errors and warnings with paths'
     );
+}
+
+#
+# -r runs restarts and keeps state next to the cache, without -r they are only reported
+#
+{
+    my ( $fh, $restart_log ) = tempfile( DIR => $dir, SUFFIX => '.log' );
+    close($fh);
+    my $cfg = write_config( "crit_check|$perl -e 'exit 2'\n"
+            . "\@r1|checks=crit_check|$perl -e 'open(my \$f, q(>>), q($restart_log)); print \$f qq(r1\\n)'\n" );
+
+    my $cache = File::Spec->catfile( $dir, 'norestart.cache' );
+    my ( $stdout, $exit_code ) = run_sneck( '-u', '-f', $cfg, '-C', $cache );
+    is( decode_json($stdout)->{data}{restarts}{r1}{reason}, 'restarts disabled', 'without -r restarts are disabled' );
+    is( slurp($restart_log), '', 'without -r nothing is restarted' );
+    ok( !-e $cache . '.restarts', 'without -r no state file' );
+
+    $cache = File::Spec->catfile( $dir, 'restart.cache' );
+    ( $stdout, $exit_code ) = run_sneck( '-u', '-r', '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0, '-u -r exits 0' );
+    is( decode_json($stdout)->{data}{restarts}{r1}{ran}, 1, '-r runs restarts' );
+    is( slurp($restart_log), "r1\n", '-r restarted r1' );
+    ok( -f $cache . '.restarts', '-r keeps state next to the cache file' );
+
+    ( $stdout, $exit_code ) = run_sneck( '-r', '-f', $cfg, '-C', $cache );
+    like( decode_json($stdout)->{data}{restarts}{r1}{reason}, qr/^cooldown/, '-r without -u uses the same state' );
 }
 
 #

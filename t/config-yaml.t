@@ -290,6 +290,135 @@ if ( !$have_yaml ) {
 }
 
 #
+# restarts
+#
+{
+    my $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "  b: /bin/true\n"
+            . "restarts:\n"
+            . "  plain:\n"
+            . "    command: /usr/sbin/service foo restart\n"
+            . "    checks: [a]\n"
+            . "  full:\n"
+            . "    command: /usr/sbin/service bar restart %NOPE%\n"
+            . "    checks: [a, b]\n"
+            . "    threshold: 2\n"
+            . "    depends: [plain]\n"
+            . "    cascade: true\n"
+            . "    ignore_unknown: false\n"
+            . "    ignore_errored: 0\n"
+            . "    min_interval: 0\n"
+            . "    max_retries: 3\n"
+            . "    timeout: 60\n" );
+    ok( $config->is_valid, 'YAML restarts valid' ) or diag( explain( error_list($config) ) );
+    my $restarts = $config->restarts;
+    is_deeply(
+        $restarts->{plain},
+        {
+            command        => '/usr/sbin/service foo restart',
+            checks         => ['a'],
+            depends        => [],
+            threshold      => 1,
+            cascade        => 0,
+            ignore_unknown => 1,
+            ignore_errored => 1,
+            min_interval   => 180,
+            max_retries    => 0,
+            timeout        => 30,
+        },
+        'YAML restart defaults'
+    );
+    is_deeply(
+        $restarts->{full},
+        {
+            command        => '/usr/sbin/service bar restart %NOPE%',
+            checks         => [ 'a', 'b' ],
+            depends        => ['plain'],
+            threshold      => 2,
+            cascade        => 1,
+            ignore_unknown => 0,
+            ignore_errored => 0,
+            min_interval   => 0,
+            max_retries    => 3,
+            timeout        => 60,
+        },
+        'YAML restart options, true and false work for 0/1 options'
+    );
+    is_deeply(
+        warning_list($config),
+        ['restarts.full: restart "full" uses undefined variable "NOPE"'],
+        'YAML restart command warned about'
+    );
+
+    $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "debugs:\n"
+            . "  dbg: /bin/true\n"
+            . "restarts:\n"
+            . "  not_mapping: /bin/true\n"
+            . "  command_list:\n"
+            . "    command: [/bin/true]\n"
+            . "    checks: [a]\n"
+            . "  checks_string:\n"
+            . "    command: /bin/true\n"
+            . "    checks: a\n"
+            . "  no_command:\n"
+            . "    checks: [a]\n"
+            . "  list_option:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    timeout: [1]\n"
+            . "  nested_name:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [[a]]\n"
+            . "  watches_debug:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [dbg]\n"
+            . "  loop:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    depends: [loop]\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'restarts.checks_string: restart "checks_string" option "checks" must be a list',
+            'restarts.command_list: restart "command_list" option "command" must be a string',
+            'restarts.list_option: restart "list_option" option "timeout" must be a whole number of at least 1',
+            'restarts.nested_name: restart "nested_name" option "checks" has the invalid name ""',
+            'restarts.no_command: restart "no_command" has no command',
+            'restarts.not_mapping: value must be a mapping',
+            'restarts.loop: restart "loop" has a dependency cycle: loop -> loop',
+            'restarts.watches_debug: restart "watches_debug" watches unknown check "dbg", debug checks can not be watched',
+        ],
+        'YAML restart errors reported with paths'
+    );
+
+    # invalid restarts still known to the ones that depend on them
+    $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "restarts:\n"
+            . "  broken: /bin/true\n"
+            . "  bad_command:\n"
+            . "    command: [/bin/true]\n"
+            . "    checks: [a, nope]\n"
+            . "  needs_broken:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    depends: [broken, bad_command]\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'restarts.bad_command: restart "bad_command" option "command" must be a string',
+            'restarts.broken: value must be a mapping',
+            'restarts.bad_command: restart "bad_command" watches unknown check "nope"',
+        ],
+        'YAML invalid restarts still checked and still known'
+    );
+    is_deeply( [ sort keys %{ $config->restarts } ], ['needs_broken'], 'YAML restarts leaves out invalid ones' );
+}
+
+#
 # Monitoring::Sneck with a YAML config
 #
 {

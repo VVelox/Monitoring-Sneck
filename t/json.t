@@ -64,7 +64,7 @@ sub to_json_canonical {
     my $sneck   = Monitoring::Sneck->new( { config => $cfg } );
     my $decoded = decode_json( to_json_canonical( $sneck->run ) );
     my $data    = $decoded->{data};
-    for my $field (qw(hostname ok warning critical unknown errored alert alertString checks debugs time run_time vars)) {
+    for my $field (qw(hostname ok warning critical unknown errored alert alertString checks debugs restarts restarted time run_time vars)) {
         ok( exists $data->{$field}, "data.$field key present in JSON" );
     }
 }
@@ -238,7 +238,7 @@ sub to_json_canonical {
     like( $raw, qr/^\{"data":\{.*\},"error":0,"errorString":"","version":1\}$/s, 'top-level keys sorted' );
     like(
         $raw,
-        qr/^\{"data":\{"alert":0,"alertString":"","checks":\{.*\},"critical":0,"debugs":\{\},"errored":0,"hostname":"[^"]*","ok":1,"run_time":"[\d.]+","time":"?\d+"?,"unknown":0,"vars":\{"A":"1","B":"2"\},"warning":0\}/s,
+        qr/^\{"data":\{"alert":0,"alertString":"","checks":\{.*\},"critical":0,"debugs":\{\},"errored":0,"hostname":"[^"]*","ok":1,"restarted":0,"restarts":\{\},"run_time":"[\d.]+","time":"?\d+"?,"unknown":0,"vars":\{"A":"1","B":"2"\},"warning":0\}/s,
         'data keys sorted'
     );
     like(

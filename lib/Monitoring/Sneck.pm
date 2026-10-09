@@ -44,9 +44,19 @@ See L<Monitoring::Sneck::Config> for the config format and a example.
 
 =head1 USAGE
 
-snmpd should be configured as below.
+snmpd just needs to print the cache. The simplest way is to cat the
+GZip+BASE64 compressed cache, which avoids starting perl at all.
+
+    extend sneck /bin/cat /var/cache/sneck.cache.snmp
+
+sneck -c may be used instead. It reports a missing cache file as error
+JSON instead of printing nothing, but has to start perl and read the
+config on each poll.
 
     extend sneck /usr/bin/env PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin /usr/local/bin/sneck -c
+
+If the cache file is changed via cache_file or B<-C>, cat its .snmp file
+instead, or give B<-c> the same B<-C>.
 
 Then just setup a entry in like cron such as below.
 

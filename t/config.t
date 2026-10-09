@@ -612,6 +612,50 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', '' ) {
 }
 
 #
+# options
+#
+{
+    my $config = parse_raw("\$cache_file=/tmp/x y.cache\n  \$pid_dir=/tmp/run\n\$locking=1\nFOO=bar\n");
+    ok( $config->is_valid, 'options valid' );
+    is_deeply( $config->options, { cache_file => '/tmp/x y.cache', pid_dir => '/tmp/run', locking => 1 }, 'options parsed' );
+    is_deeply( $config->vars, { FOO => 'bar' }, 'options are not variables' );
+
+    $config = parse_raw("FOO=bar\n");
+    is_deeply( $config->options, {}, 'options not set are left out' );
+
+    $config = parse_raw("\$locking=0\n");
+    is_deeply( $config->options, { locking => 0 }, 'locking 0' );
+
+    $config = parse_raw( "\$cache_file=\n"
+            . "\$pid_dir=\n"
+            . "\$locking=yes\n"
+            . "\$bogus=1\n"
+            . "\$cache_file=/tmp/a\n"
+            . "\$locking=1\n"
+            . "chk|/bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            '1: option "cache_file" may not be empty',
+            '2: option "pid_dir" may not be empty',
+            '3: option "locking" must be 0 or 1',
+            '4: unknown option "bogus"',
+            '5: option "cache_file" is redefined',
+            '6: option "locking" is redefined',
+        ],
+        'option errors'
+    );
+    is_deeply( $config->options, {}, 'invalid options left out' );
+
+    $config = parse_raw("\$pid_dir=/tmp/run\nbad line\n");
+    ok( !$config->is_valid, 'config with other errors invalid' );
+    is_deeply( $config->options, { pid_dir => '/tmp/run' }, 'valid options kept when the config has other errors' );
+
+    $config->options->{pid_dir} = 'changed';
+    is( $config->options->{pid_dir}, '/tmp/run', 'options returns a copy' );
+}
+
+#
 # substitute
 #
 {

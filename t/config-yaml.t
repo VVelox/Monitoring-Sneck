@@ -616,4 +616,38 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', "''" ) {
     is_deeply( [ sort keys %{$restarts} ], [ 'quoted', 'unquoted' ], 'YAML restarts with a bad not_every left out' );
 }
 
+#
+# options
+#
+{
+    my $config = parse_yaml("options:\n  cache_file: /tmp/x.cache\n  pid_dir: /tmp/run\n  locking: true\n");
+    ok( $config->is_valid, 'YAML options valid' );
+    is_deeply( $config->options, { cache_file => '/tmp/x.cache', pid_dir => '/tmp/run', locking => 1 }, 'YAML options parsed' );
+
+    $config = parse_yaml("options:\n  locking: false\n");
+    is_deeply( $config->options, { locking => 0 }, 'YAML locking false is 0' );
+
+    $config = parse_yaml( "options:\n"
+            . "  cache_file: ~\n"
+            . "  pid_dir: [a]\n"
+            . "  locking: 2\n"
+            . "  bogus: 1\n"
+            . "checks:\n"
+            . "  a: /bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'options.bogus: unknown option "bogus"',
+            'options.cache_file: option "cache_file" may not be empty',
+            'options.locking: option "locking" must be 0 or 1',
+            'options.pid_dir: option "pid_dir" must be a string or number',
+        ],
+        'YAML option errors'
+    );
+    is_deeply( $config->options, {}, 'YAML invalid options left out' );
+
+    $config = parse_yaml("options: 1\n");
+    is_deeply( error_list($config), ['options: must be a mapping'], 'YAML options not a mapping' );
+}
+
 done_testing();

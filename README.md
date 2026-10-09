@@ -3,9 +3,9 @@
 ## SYNOPSIS
 
 ```
-sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l] [-r]
+sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l|-L] [-P <pid dir>] [-r]
 
-sneck -c [-C <cache file>] [-b]
+sneck -c [-C <cache file>] [-f <config file>] [-b]
 
 sneck [-f <config file>] [-p] [-i] [-r]
 
@@ -13,6 +13,9 @@ sneck -t [-f <config file>]
 ```
 
 ## FLAGS
+
+The cache file, PID dir, and locking may also be set in the config
+file. Flags override those. See OPTIONS.
 
 ### -f config_file
 
@@ -29,6 +32,8 @@ Pretty it in a nicely formatted format.
 ### -C cache_file
 
 The cache file to use.
+
+Overrides `cache_file` in the config.
 
 Default :: /var/cache/sneck.cache
 
@@ -65,6 +70,23 @@ Don't print the results for -u. Exit quietly.
 ### -l
 
 Enable locking for -u so more than one instance can't run at a time.
+Overrides `locking` in the config.
+
+The PID file is sneck.pid in the directory set by -P.
+
+### -L
+
+Disable locking, overriding `locking` in the config. Can not be used
+with -l.
+
+### -P pid_dir
+
+The directory for the PID file used by -l. The user running sneck must
+be able to write to it.
+
+Overrides `pid_dir` in the config.
+
+Default :: /var/run
 
 ### -r
 
@@ -76,8 +98,8 @@ Restart state, used for `min_interval` and `max_retries`, is kept in the
 cache file name with `.restarts` added, so by default
 /var/cache/sneck.cache.restarts.
 
-Use -l with this to make sure two runs can't restart things at the same
-time.
+Use locking with this to make sure two runs can't restart things at the
+same time.
 
 ### -t
 
@@ -102,6 +124,8 @@ Lines starting with # are comments and are ignored.
   insensitive. The value may be empty. These may be set more than once,
   with the last one winning. They are only applied if the whole config
   is valid.
+
+- `$name=value` :: A option. See OPTIONS.
 
 - `NAME=value` :: A variable. The name is before the first =, the value
   is everything after it. The value may be empty.
@@ -128,7 +152,8 @@ variable that is not defined is left as written and produces a warning,
 as it may just be part of the command, such as `date +%Y%m%d`. Use `-t`
 to see warnings.
 
-Variable, check, debug check, and restart names may not be redefined.
+Option, variable, check, debug check, and restart names may not be
+redefined.
 
 ## EXAMPLE CONFIG
 
@@ -184,6 +209,8 @@ debugs:
   routes: netstat -rn
 ```
 
+- `options` :: Options. See OPTIONS.
+
 - `env` :: Environment variables to set, in sorted name order. Only
   applied if the whole config is valid.
 
@@ -218,6 +245,33 @@ Some things to watch for.
   quoted, or it is read as a mapping.
 
 - Duplicate keys are not caught. YAML::XS silently keeps the last one.
+
+## OPTIONS
+
+Options are settings for sneck itself. Flags override them.
+
+- `cache_file` :: The cache file. The same as -C. May not be empty.
+
+- `pid_dir` :: The directory for the PID file used for locking. The
+  same as -P. May not be empty.
+
+- `locking` :: If 1, locking is enabled. The same as -l. -L disables
+  it. Takes true and false in YAML.
+
+Any other option is an error.
+
+```
+$cache_file=/var/db/sneck/sneck.cache
+$pid_dir=/var/run/sneck
+$locking=1
+```
+
+```
+options:
+  cache_file: /var/db/sneck/sneck.cache
+  pid_dir: /var/run/sneck
+  locking: true
+```
 
 ## RESTARTS
 

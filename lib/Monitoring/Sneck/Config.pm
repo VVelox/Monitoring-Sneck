@@ -12,11 +12,11 @@ Monitoring::Sneck::Config - parses and validates sneck config files
 
 =head1 VERSION
 
-Version 1.5.0
+Version 1.6.0
 
 =cut
 
-our $VERSION = '1.5.0';
+our $VERSION = '1.6.0';
 
 =head1 SYNOPSIS
 
@@ -76,6 +76,9 @@ variables. The name is between the space and the first =, the value is
 everything after it. The value may be empty. These may be set more than
 once, with the last one winning.
 
+Lines matching /^\$[A-Za-z0-9\_]+\=/ are options. The name is between
+the $ and the first =, the value is everything after it. See OPTIONS.
+
 Lines matching /^[A-Za-z0-9\_]+\=/ are variables. The name is before the
 first =, the value is everything after it. The value may be empty.
 
@@ -96,7 +99,8 @@ depends options are comma separated lists. See RESTARTS.
 
 Any other sort of line is an error.
 
-Variable, check, debug check, and restart names may not be redefined.
+Option, variable, check, debug check, and restart names may not be
+redefined.
 
 =head3 EXAMPLE SNECK CONFIG
 
@@ -152,8 +156,10 @@ or '2> /dev/null > /dev/null' when calling it from cron.
 This needs L<YAML::XS>, which is optional and only loaded when a YAML
 config is used.
 
-The top level is a mapping with up to five keys, each of which is a
+The top level is a mapping with up to six keys, each of which is a
 mapping of names to values.
+
+    - options :: Options. See OPTIONS.
 
     - env :: Environment variables to set. Set in sorted name order.
 
@@ -198,6 +204,31 @@ so redefinitions can not be caught like they are in the sneck format.
       php_fpm:
         command: /usr/sbin/service php_fpm restart
         checks: [php_check]
+
+=head1 OPTIONS
+
+Options are settings for sneck itself. Options given on the command
+line override these. L<Monitoring::Sneck> does not use them.
+
+    - cache_file :: The cache file. The same as B<-C> for sneck.
+      May not be empty.
+
+    - pid_dir :: The directory for the PID file used for locking. The
+      same as B<-P> for sneck. May not be empty.
+
+    - locking :: If 1, locking is enabled. The same as B<-l> for sneck.
+      B<-L> disables it. Takes true and false in YAML.
+
+Any other option is an error.
+
+    $cache_file=/var/db/sneck/sneck.cache
+    $pid_dir=/var/run/sneck
+    $locking=1
+
+    options:
+      cache_file: /var/db/sneck/sneck.cache
+      pid_dir: /var/run/sneck
+      locking: true
 
 =head1 RESTARTS
 
@@ -385,6 +416,7 @@ sub new {
 		file     => $args{file},
 		raw      => undef,
 		format   => 'sneck',
+		options  => {},
 		vars     => {},
 		env      => [],
 		checks   => {},
@@ -505,7 +537,8 @@ below.
     - message :: A description of the problem.
 
 For the sneck format these are in line order. For YAML they are in
-section order, env, vars, checks, then debugs, then by name.
+section order, options, env, vars, checks, debugs, then restarts, then by
+name.
 
     foreach my $error ( $config->errors ) {
         print $error->{where} . ': ' . $error->{message} . "\n";
@@ -530,6 +563,21 @@ as errors.
 
 sub warnings {
 	return @{ $_[0]->{warnings} };
+}
+
+=head2 options
+
+Returns a hash ref of the options set in the config, with the names as
+keys. Options not set are left out, so the caller can fall back to its
+own defaults. Invalid ones are also left out. locking is always 0 or 1.
+This is a copy, so changing it does not change the config.
+
+    my $cache_file = $config->options->{cache_file};
+
+=cut
+
+sub options {
+	return { %{ $_[0]->{options} } };
 }
 
 =head2 vars
@@ -655,8 +703,8 @@ sub substitute {
 	return $string;
 }
 
-# Parses $self->{raw} as the sneck format, filling in vars, env, checks,
-# debugs, errors, and warnings. Called once by new. Takes no args and
+# Parses $self->{raw} as the sneck format, filling in options, vars, env,
+# checks, debugs, restarts, errors, and warnings. Called once by new. Takes no args and
 # returns nothing.
 #
 # Lines are numbered from 1 so errors and warnings can point at them. All
@@ -676,6 +724,9 @@ sub _parse_sneck {
 	# where each command was defined, for undefined variable warnings
 	my %command_locations;
 
+	# options already given, even if invalid, so redefinitions are caught
+	my %option_seen;
+
 	my $line_number = 0;
 	foreach my $text ( split( /\n/, $self->{raw} ) ) {
 		$line_number++;
@@ -691,6 +742,14 @@ sub _parse_sneck {
 			next;
 		} elsif ( $line =~ /^[Ee][Nn][Vv]\ ([A-Za-z0-9\_]+)\=(.*)$/ ) {
 			push( @{ $self->{env} }, [ $1, $2 ] );
+		} elsif ( $line =~ /^\$([A-Za-z0-9\_]+)\=(.*)$/ ) {
+			my ( $name, $value ) = ( $1, $2 );
+			if ( $option_seen{$name} ) {
+				$self->_add_problem( 'errors', $location, 'option "' . $name . '" is redefined' );
+				next;
+			}
+			$option_seen{$name} = 1;
+			$self->_add_option( $name, $value, $location );
 		} elsif ( $line =~ /^([A-Za-z0-9\_]+)\=(.*)$/ ) {
 			my ( $name, $value ) = ( $1, $2 );
 			if ( defined( $self->{vars}{$name} ) ) {
@@ -807,14 +866,14 @@ sub _split_options {
 	return ( \@options, undef );
 } ## end sub _split_options
 
-# Parses $self->{raw} as YAML, filling in vars, env, checks, debugs,
-# errors, and warnings. Called once by new after YAML::XS has been loaded.
+# Parses $self->{raw} as YAML, filling in options, vars, env, checks, debugs,
+# restarts, errors, and warnings. Called once by new after YAML::XS has been loaded.
 # Takes no args and returns nothing.
 #
 # YAML::XS gives no line numbers for keys, so problems point at a path
 # such as 'checks.foo' instead. A YAML syntax error is a single error with
-# the path 'YAML'. Sections are handled in the order env, vars, checks,
-# debugs, and names within them in sorted order, so problems come out in
+# the path 'YAML'. Sections are handled in the order options, env, vars,
+# checks, debugs, restarts, and names within them in sorted order, so problems come out in
 # a stable order.
 #
 # Example...
@@ -859,7 +918,7 @@ sub _parse_yaml {
 		return;
 	}
 
-	my %known_sections = ( env => 1, vars => 1, checks => 1, debugs => 1, restarts => 1 );
+	my %known_sections = ( options => 1, env => 1, vars => 1, checks => 1, debugs => 1, restarts => 1 );
 	foreach my $key ( sort( keys( %{$config} ) ) ) {
 		if ( !$known_sections{$key} ) {
 			$self->_add_problem( 'errors', { path => $key }, 'unknown top level key "' . $key . '"' );
@@ -869,7 +928,7 @@ sub _parse_yaml {
 	# where each command was defined, for undefined variable warnings
 	my %command_locations;
 
-	foreach my $section ( 'env', 'vars', 'checks', 'debugs', 'restarts' ) {
+	foreach my $section ( 'options', 'env', 'vars', 'checks', 'debugs', 'restarts' ) {
 		my $items = $config->{$section};
 		if ( !defined($items) ) {
 			next;
@@ -904,6 +963,11 @@ sub _parse_yaml {
 				next;
 			} ## end if ( $section eq 'restarts' )
 
+			if ( $section eq 'options' ) {
+				$self->_add_option( $name, $value, $location );
+				next;
+			}
+
 			if ( ref($value) ) {
 				$self->_add_problem( 'errors', $location, 'value must be a string or number' );
 				next;
@@ -919,13 +983,67 @@ sub _parse_yaml {
 				}
 			}
 		} ## end foreach my $name ( sort( keys( %{$items} ) ) )
-	} ## end foreach my $section ( 'env', 'vars', 'checks', 'debugs', 'restarts' )
+	} ## end foreach my $section ( 'options', 'env', 'vars', 'checks', 'debugs', 'restarts' )
 
 	$self->_validate_restarts( $command_locations{restarts} );
 	$self->_warn_undefined_vars( \%command_locations );
 
 	return;
 } ## end sub _parse_yaml
+
+# Validates and adds a option. Used by both parsers. Records a error if the
+# option is unknown or its value is bad, in which case it is not added.
+#
+# Args...
+#
+#     - name :: The name of the option, without the leading $ used by the
+#       sneck format.
+#
+#     - value :: The value. For YAML this may be undef or, in error, a
+#       reference. YAML false comes through as a empty string and is taken
+#       as 0 for locking.
+#
+#     - location :: Hash ref of where it was defined, as taken by
+#       _add_problem.
+#
+# Returns 1 if it was added or 0 if there was a error.
+#
+# Example...
+#
+#     $self->_add_option( 'locking', 1, { line => 2, text => '$locking=1' } );
+#     # returns 1 and $self->{options}{locking} is 1
+#
+#     $self->_add_option( 'pid_dir', '', { path => 'options.pid_dir' } );
+#     # returns 0 and adds the error 'option "pid_dir" may not be empty'
+sub _add_option {
+	my ( $self, $name, $value, $location ) = @_;
+
+	my $label = 'option "' . $name . '"';
+
+	if ( $name ne 'cache_file' && $name ne 'pid_dir' && $name ne 'locking' ) {
+		$self->_add_problem( 'errors', $location, 'unknown ' . $label );
+		return 0;
+	}
+
+	if ( ref($value) ) {
+		$self->_add_problem( 'errors', $location, $label . ' must be a string or number' );
+		return 0;
+	}
+
+	if ( $name eq 'locking' ) {
+		if ( !defined($value) || $value !~ /^[01]?$/ ) {
+			$self->_add_problem( 'errors', $location, $label . ' must be 0 or 1' );
+			return 0;
+		}
+		$value = $value ? 1 : 0;
+	} elsif ( !defined($value) || $value eq '' ) {
+		$self->_add_problem( 'errors', $location, $label . ' may not be empty' );
+		return 0;
+	}
+
+	$self->{options}{$name} = $value;
+	return 1;
+} ## end sub _add_option
 
 # Adds a check or debug check after making sure it has a command. Leading
 # spaces and tabs are removed from the command first. Used by both

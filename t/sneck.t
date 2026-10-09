@@ -332,7 +332,7 @@ SKIP: {
     is( $exit_code, 0, '-u -r exits 0' );
     is(
         $stderr,
-        "-r used without -l, so overlapping runs may restart things more than once\n",
+        "-r used without locking, so overlapping runs may restart things more than once\n",
         '-r without -l warns'
     );
     is( decode_json($stdout)->{data}{restarts}{r1}{ran}, 1, '-r runs restarts' );
@@ -398,7 +398,7 @@ SKIP: {
         = run_sneck_stderr( '-u', '-l', '-P', File::Spec->catfile( $dir, 'no', 'such', 'dir' ), '-f', $cfg, '-C',
         File::Spec->catfile( $dir, 'bad_pid_dir.cache' ) );
     isnt( $exit_code, 0, '-l with a missing -P dir exits non-zero' );
-    like( $stderr, qr/^-l specified and PID file check failed/, '-l with a missing -P dir says why' );
+    like( $stderr, qr/^locking enabled and PID file check failed/, '-l with a missing -P dir says why' );
     is( $stdout, '', '-l with a missing -P dir prints nothing' );
 }
 
@@ -465,6 +465,66 @@ SKIP: {
     ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
     is( $exit_code, 0, '-t with only restart warnings exits 0' );
     like( $stdout, qr/^warning: line 2: restart "r1" uses undefined variable "NOPE"\nconfig OK: /, '-t prints restart warning then OK' );
+}
+
+#
+# cache_file from the config is used by -u and -c, with -C overriding it
+#
+{
+    my $cache = File::Spec->catfile( $dir, 'option.cache' );
+    my $cfg   = write_config( "\$cache_file=$cache\n" . $ok_check );
+
+    my ( $stdout, $exit_code ) = run_sneck( '-u', '-q', '-f', $cfg );
+    is( $exit_code, 0, 'config cache_file -u exits 0' );
+    ok( -f $cache,           'config cache_file used by -u' );
+    ok( -f $cache . '.snmp', 'config cache_file used for the .snmp cache' );
+
+    ( $stdout, $exit_code ) = run_sneck( '-c', '-f', $cfg );
+    is( $stdout, slurp($cache), 'config cache_file used by -c' );
+
+    my $override = File::Spec->catfile( $dir, 'option_override.cache' );
+    ( $stdout, $exit_code ) = run_sneck( '-u', '-q', '-f', $cfg, '-C', $override );
+    ok( -f $override, '-C overrides config cache_file' );
+
+    # options are still used when the rest of the config is bad, so the error lands in the right cache
+    my $bad_cache = File::Spec->catfile( $dir, 'option_bad.cache' );
+    $cfg = write_config("\$cache_file=$bad_cache\nthis is not valid\n");
+    ( $stdout, $exit_code ) = run_sneck( '-u', '-q', '-f', $cfg );
+    ok( -f $bad_cache, 'config cache_file used when the config has errors' );
+    is( decode_json( slurp($bad_cache) )->{error}, 1, 'config error written to config cache_file' );
+}
+
+#
+# locking and pid_dir from the config, with -P, -L, and -l overriding them
+#
+{
+    my $bad_pid_dir  = File::Spec->catfile( $dir, 'no', 'such', 'option_dir' );
+    my $good_pid_dir = tempdir( DIR => $dir );
+    my $cache        = File::Spec->catfile( $dir, 'option_lock.cache' );
+
+    my $cfg = write_config( "\$locking=1\n\$pid_dir=$bad_pid_dir\n" . $ok_check );
+    my ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-q', '-f', $cfg, '-C', $cache );
+    isnt( $exit_code, 0, 'config locking and pid_dir used' );
+    like( $stderr, qr/^locking enabled and PID file check failed/, 'config locking says why it failed' );
+
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-q', '-P', $good_pid_dir, '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0,  '-P overrides config pid_dir' );
+    is( $stderr,    '', '-P overrides config pid_dir without warnings' );
+
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-q', '-L', '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0, '-L overrides config locking' );
+
+    $cfg = write_config( "\$locking=0\n\$pid_dir=$bad_pid_dir\n" . $ok_check );
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-q', '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0, 'config locking 0 does not lock' );
+
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-q', '-l', '-f', $cfg, '-C', $cache );
+    isnt( $exit_code, 0, '-l overrides config locking 0' );
+
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-l', '-L', '-f', $cfg, '-C', $cache );
+    isnt( $exit_code, 0, '-l with -L exits non-zero' );
+    is( $stderr, "-l and -L can not be used together\n", '-l with -L says why' );
+    is( $stdout, '', '-l with -L prints nothing' );
 }
 
 #

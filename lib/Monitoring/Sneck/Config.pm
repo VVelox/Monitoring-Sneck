@@ -4,6 +4,7 @@ use 5.006;
 use strict;
 use warnings;
 use File::Slurp qw(read_file);
+use Config      qw(%Config);
 
 =head1 NAME
 
@@ -242,11 +243,23 @@ Options are as below.
       Default :: 0
 
     - timeout :: Seconds to wait on the command before giving up on it.
-      On timeout its output pipes are closed and it is left running.
-      Nothing is sent to it, but if it writes again it gets SIGPIPE, or
-      whatever it does when the reader goes away. A timeout counts as
-      failed, with a exit of -1.
+      On timeout its output pipes are closed and it is left running,
+      unless timeout_signal is set. If it writes again it gets SIGPIPE,
+      or whatever it does when the reader goes away. A timeout counts
+      as failed, with a exit of -1.
       Default :: 30
+
+    - timeout_signal :: Signal to send the command on timeout, as a
+      name such as TERM or SIGTERM, or a number. 0 is not allowed. It is
+      sent to the PID of the command and it is not waited on afterwards.
+      If the command has shell metacharacters in it, that PID is the
+      /bin/sh running it, so use kill_sub_pids to reach the command.
+      Default :: none
+
+    - kill_sub_pids :: If 1, the timeout signal is also sent to all
+      child processes of the command, found via pgrep and signaled via
+      pkill, deepest first. Does nothing without timeout_signal.
+      Default :: 1
 
 Critical always counts as failed. Ok and warning never do.
 
@@ -266,6 +279,15 @@ exited, so a daemon started by it holding stdout open is fine.
         depends: [php_fpm]
         cascade: true
         timeout: 60
+
+    @php_fpm|checks=php_check timeout=60 timeout_signal=TERM|/usr/sbin/service php_fpm restart
+
+    restarts:
+      php_fpm:
+        command: /usr/sbin/service php_fpm restart
+        checks: [php_check]
+        timeout: 60
+        timeout_signal: TERM
 
 =head1 METHODS
 
@@ -532,8 +554,11 @@ This is a copy, so changing it does not change the config.
     - depends :: Array ref of the names of the restarts depended on.
 
     - threshold, cascade, ignore_unknown, ignore_errored, min_interval,
-      max_retries, timeout :: As described under RESTARTS. The 0/1
-      options are always 0 or 1.
+      max_retries, timeout, kill_sub_pids :: As described under
+      RESTARTS. The 0/1 options are always 0 or 1.
+
+    - timeout_signal :: The signal name without the SIG prefix, such as
+      TERM, or undef if not set. Numbers are turned into names.
 
     my $threshold = $config->restarts->{httpd}{threshold};
 
@@ -880,7 +905,8 @@ sub _add_command {
 #     # returns 1 and $self->{restarts}{httpd} is
 #     # { command => '/usr/sbin/service apache24 restart', checks => [ 'http_check', 'php_check' ],
 #     #   depends => [], threshold => 2, cascade => 0, ignore_unknown => 1, ignore_errored => 1,
-#     #   min_interval => 180, max_retries => 0, timeout => 30 }
+#     #   min_interval => 180, max_retries => 0, timeout => 30, timeout_signal => undef,
+#     #   kill_sub_pids => 1 }
 sub _add_restart {
 	my ( $self, $name, $command, $options, $location ) = @_;
 
@@ -927,7 +953,7 @@ sub _add_restart {
 		$self->_add_problem( 'errors', $location, $label . ' has no checks' );
 	}
 
-	foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored' ) {
+	foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids' ) {
 		if ( !exists( $options->{$key} ) ) {
 			next;
 		}
@@ -937,7 +963,17 @@ sub _add_restart {
 			next;
 		}
 		$restart{$key} = $value ? 1 : 0;
-	} ## end foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored' )
+	} ## end foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids' )
+
+	if ( exists( $options->{timeout_signal} ) ) {
+		my $signal = $self->_signal_name( $options->{timeout_signal} );
+		if ( defined($signal) ) {
+			$restart{timeout_signal} = $signal;
+		} else {
+			$self->_add_problem( 'errors', $location,
+				$label . ' option "timeout_signal" must be a signal name or a signal number other than 0' );
+		}
+	}
 
 	my %minimums = ( threshold => 1, min_interval => 0, max_retries => 0, timeout => 1 );
 	foreach my $key ( sort( keys(%minimums) ) ) {
@@ -1008,8 +1044,70 @@ sub _restart_defaults {
 		min_interval   => 180,
 		max_retries    => 0,
 		timeout        => 30,
+		timeout_signal => undef,
+		kill_sub_pids  => 1,
 	};
 } ## end sub _restart_defaults
+
+# Turns a signal given in a config into its name, as used by kill and
+# pkill. Known signals come from $Config{sig_name} and $Config{sig_num}, so
+# what is accepted matches the OS perl was built for.
+#
+# Args...
+#
+#     - signal :: The signal from the config. A name, with or without the
+#       SIG prefix and in any case, or a number. undef or a reference is
+#       taken as invalid.
+#
+# Returns the upper case name without the SIG prefix, or undef if it is not
+# a known signal or is 0. If a number has more than one name, the first one
+# listed by $Config{sig_name} is used.
+#
+# Example...
+#
+#     my $signal = $self->_signal_name('sigterm');
+#     # $signal is 'TERM'
+#
+#     my $signal = $self->_signal_name(9);
+#     # $signal is 'KILL'
+#
+#     my $signal = $self->_signal_name(0);
+#     # $signal is undef
+sub _signal_name {
+	my ( $self, $signal ) = @_;
+
+	if ( !defined($signal) || ref($signal) ) {
+		return undef;
+	}
+
+	my @names   = split( ' ', $Config{sig_name} );
+	my @numbers = split( ' ', $Config{sig_num} );
+	my %numbers_by_name;
+	my %names_by_number;
+	foreach my $index ( 0 .. $#names ) {
+		$numbers_by_name{ $names[$index] } = $numbers[$index];
+		if ( !exists( $names_by_number{ $numbers[$index] } ) ) {
+			$names_by_number{ $numbers[$index] } = $names[$index];
+		}
+	}
+
+	my $name;
+	if ( $signal =~ /^[0-9]+$/ ) {
+		$name = $names_by_number{ $signal + 0 };
+	} else {
+		$name = uc($signal);
+		$name =~ s/^SIG//;
+		if ( !exists( $numbers_by_name{$name} ) ) {
+			$name = undef;
+		}
+	}
+
+	if ( !defined($name) || $numbers_by_name{$name} == 0 ) {
+		return undef;
+	}
+
+	return $name;
+} ## end sub _signal_name
 
 # Checks the restarts against the rest of the config once everything is
 # parsed. Records a error for each watched check that does not exist,

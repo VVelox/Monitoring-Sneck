@@ -162,7 +162,9 @@ The rest are only present if it ran.
       checks, plus -1 if it timed out.
 
     - $hash{data}{restarts}{$name}{error} :: Only present if it timed
-      out, died on a signal, or could not be executed.
+      out, died on a signal, or could not be executed. If it timed out
+      and timeout_signal is set, also says the signal was sent, plus
+      any problems sending it.
 
     - $hash{data}{restarts}{$name}{run_time} :: How long it took to run.
 
@@ -684,7 +686,8 @@ sub _run_restart {
 		warn( 'restart ' . $name . ' running for ' . $reason . ': "' . $ran_command . '"' );
 	}
 
-	my $command_result = $self->_run_restart_command( $ran_command, $restart->{timeout} );
+	my $command_result = $self->_run_restart_command( $ran_command, $restart->{timeout}, $restart->{timeout_signal},
+		$restart->{kill_sub_pids} );
 
 	$result->{ran}         = 1;
 	$result->{reason}      = $reason;
@@ -720,15 +723,23 @@ sub _run_restart {
 # stderr is collected until the command exits. It does not wait for the
 # pipes to close, as a daemon started by the command may keep them open.
 #
-# On timeout, the pipes are closed and the command is left running. Nothing
-# is sent to it. If it writes again it gets SIGPIPE, or whatever it does to
-# handle the reader going away. Its exit code is never collected.
+# On timeout, if a signal is given, it is sent to the command, and to its
+# child processes first if kill_sub_pids is 1. Then the pipes are closed and
+# the command is given up on. Without a signal it is left running and if it
+# writes again it gets SIGPIPE, or whatever it does to handle the reader
+# going away. Either way its exit code is never collected.
 #
 # Args...
 #
 #     - command :: The command to run, after variable substitution.
 #
 #     - timeout :: Seconds to wait before giving up on it.
+#
+#     - timeout_signal :: Signal name to send on timeout, without the SIG
+#       prefix, such as 'TERM'. undef to send nothing.
+#
+#     - kill_sub_pids :: 1 to also send the signal to all child processes
+#       of the command. See _signal_sub_pids.
 #
 # Returns a hash ref as below.
 #
@@ -739,20 +750,25 @@ sub _run_restart {
 #       signal. -1 if it timed out or could not be executed.
 #
 #     - error :: Only present if it timed out, died on a signal, or could
-#       not be executed.
+#       not be executed. On timeout with a signal, says it was sent along
+#       with any problems sending it.
 #
 # Example...
 #
-#     my $result = $self->_run_restart_command( '/usr/sbin/service apache24 restart', 30 );
+#     my $result = $self->_run_restart_command( '/usr/sbin/service apache24 restart', 30, undef, 1 );
 #     # $result is { output => 'Performing sanity check...', exit => 0 }
 #
-#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1 );
+#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1, undef, 1 );
 #     # $result is { output => '', exit => -1, error => 'timed out after 1 seconds' }
+#
+#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1, 'TERM', 1 );
+#     # $result is { output => '', exit => -1, error => 'timed out after 1 seconds, sent SIGTERM' }
 sub _run_restart_command {
-	my ( $self, $command, $timeout ) = @_;
+	my ( $self, $command, $timeout, $timeout_signal, $kill_sub_pids ) = @_;
 
 	my %result = ( output => '', exit => -1 );
 	my $wait_status;
+	my @signal_errors;
 	eval {
 		my $pid = open3( my $std_in, my $std_out, my $std_err = gensym, $command );
 		close($std_in);
@@ -802,6 +818,16 @@ sub _run_restart_command {
 			} ## end while ( $select->count && Time::HiRes::time < $drain_deadline )
 		} ## end if ( defined($wait_status) )
 
+		# children first, as once the command is gone they are no longer findable via its PID
+		if ( !defined($wait_status) && defined($timeout_signal) ) {
+			if ($kill_sub_pids) {
+				push( @signal_errors, $self->_signal_sub_pids( $timeout_signal, $pid ) );
+			}
+			if ( !kill( $timeout_signal, $pid ) ) {
+				push( @signal_errors, 'failed to send SIG' . $timeout_signal . ' to ' . $pid . ': ' . $! );
+			}
+		}
+
 		close($std_out);
 		close($std_err);
 	};
@@ -815,6 +841,12 @@ sub _run_restart_command {
 	chomp( $result{output} );
 	if ( !defined($wait_status) ) {
 		$result{error} = 'timed out after ' . $timeout . ' seconds';
+		if ( defined($timeout_signal) ) {
+			$result{error} = $result{error} . ', sent SIG' . $timeout_signal;
+			if ( defined( $signal_errors[0] ) ) {
+				$result{error} = $result{error} . ', ' . join( '; ', @signal_errors );
+			}
+		}
 	} elsif ( $wait_status & 127 ) {
 		$result{exit}  = 128 + ( $wait_status & 127 );
 		$result{error} = 'child died with signal ' . ( $wait_status & 127 );
@@ -824,6 +856,63 @@ sub _run_restart_command {
 
 	return \%result;
 } ## end sub _run_restart_command
+
+# Sends a signal to every process below a PID, deepest first, so a process
+# is signaled before its parent and is not orphaned out of reach. Children
+# are found via pgrep -P and signaled via pkill -P. Used on restart timeout.
+#
+# Args...
+#
+#     - signal :: Signal name without the SIG prefix, such as 'TERM'.
+#
+#     - pid :: The PID whose children, and their children, get the signal.
+#       It is not signaled itself.
+#
+# Returns a array of problems, each a string, or a empty array if there
+# were none. pgrep or pkill finding nothing is not a problem.
+#
+# Example...
+#
+#     my @errors = $self->_signal_sub_pids( 'TERM', 12345 );
+#     # every process below 12345 got SIGTERM and @errors is ()
+#
+#     my @errors = $self->_signal_sub_pids( 'TERM', 12345 );
+#     # without pgrep installed, @errors is ( 'failed to run pgrep: No such file or directory' )
+sub _signal_sub_pids {
+	my ( $self, $signal, $pid ) = @_;
+
+	my $pgrep_fh;
+	if ( !open( $pgrep_fh, '-|', 'pgrep', '-P', $pid ) ) {
+		return ( 'failed to run pgrep: ' . $! );
+	}
+	my @children;
+	while ( my $line = <$pgrep_fh> ) {
+		if ( $line =~ /^([0-9]+)\s*$/ ) {
+			push( @children, $1 );
+		}
+	}
+	close($pgrep_fh);
+	# 1 is nothing found
+	if ( ( $? >> 8 ) > 1 || ( $? & 127 ) ) {
+		return ( 'pgrep -P ' . $pid . ' failed with wait status ' . $? );
+	}
+
+	my @errors;
+	foreach my $child (@children) {
+		push( @errors, $self->_signal_sub_pids( $signal, $child ) );
+	}
+
+	if ( defined( $children[0] ) ) {
+		system( 'pkill', '-' . $signal, '-P', $pid );
+		if ( $? == -1 ) {
+			push( @errors, 'failed to run pkill: ' . $! );
+		} elsif ( ( $? >> 8 ) > 1 || ( $? & 127 ) ) {
+			push( @errors, 'pkill -' . $signal . ' -P ' . $pid . ' failed with wait status ' . $? );
+		}
+	}
+
+	return @errors;
+} ## end sub _signal_sub_pids
 
 
 # Decides if a check result counts as failed for a restart. Critical

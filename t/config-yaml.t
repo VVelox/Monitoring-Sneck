@@ -310,7 +310,9 @@ if ( !$have_yaml ) {
             . "    ignore_errored: 0\n"
             . "    min_interval: 0\n"
             . "    max_retries: 3\n"
-            . "    timeout: 60\n" );
+            . "    timeout: 60\n"
+            . "    timeout_signal: 9\n"
+            . "    kill_sub_pids: false\n" );
     ok( $config->is_valid, 'YAML restarts valid' ) or diag( explain( error_list($config) ) );
     my $restarts = $config->restarts;
     is_deeply(
@@ -326,6 +328,8 @@ if ( !$have_yaml ) {
             min_interval   => 180,
             max_retries    => 0,
             timeout        => 30,
+            timeout_signal => undef,
+            kill_sub_pids  => 1,
         },
         'YAML restart defaults'
     );
@@ -342,6 +346,8 @@ if ( !$have_yaml ) {
             min_interval   => 0,
             max_retries    => 3,
             timeout        => 60,
+            timeout_signal => 'KILL',
+            kill_sub_pids  => 0,
         },
         'YAML restart options, true and false work for 0/1 options'
     );
@@ -439,17 +445,26 @@ if ( !$have_yaml ) {
             . "    timeout: 0\n"
             . "    cascade: 2\n"
             . "    ignore_unknown: yes\n"
-            . "    ignore_errored: ~\n" );
+            . "    ignore_errored: ~\n"
+            . "    timeout_signal: ~\n"
+            . "    kill_sub_pids: [1]\n"
+            . "  list_signal:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    timeout_signal: [TERM]\n" );
     is_deeply(
         error_list($config),
         [
             'restarts.bad_values: restart "bad_values" option "cascade" must be 0 or 1',
             'restarts.bad_values: restart "bad_values" option "ignore_unknown" must be 0 or 1',
             'restarts.bad_values: restart "bad_values" option "ignore_errored" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "kill_sub_pids" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "timeout_signal" must be a signal name or a signal number other than 0',
             'restarts.bad_values: restart "bad_values" option "max_retries" must be a whole number of at least 0',
             'restarts.bad_values: restart "bad_values" option "min_interval" must be a whole number of at least 0',
             'restarts.bad_values: restart "bad_values" option "threshold" must be a whole number of at least 1',
             'restarts.bad_values: restart "bad_values" option "timeout" must be a whole number of at least 1',
+            'restarts.list_signal: restart "list_signal" option "timeout_signal" must be a signal name or a signal number other than 0',
         ],
         'YAML restart option values checked'
     );

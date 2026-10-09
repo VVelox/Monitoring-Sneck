@@ -14,7 +14,7 @@ Revision history for Monitoring-Sneck
         - add -t for testing the config
         - add optional YAML config support via YAML::XS for .yaml/.yml files
         - add restarts, run via -r, with thresholds, depends, cascade,
-          cooldown, max retries, and timeouts
+          cooldown, max retries, timeouts, and timeout signals
         - cache files are now written atomically
         - checks get a closed stdin so ones reading it no longer hang
         - add -P for PID dir

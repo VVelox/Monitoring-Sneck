@@ -71,6 +71,22 @@ open( my $fh, '>', $marker );
 exit 0;
 END
 
+# tree.pl starts a child, which starts a grandchild. Each sleeps 3 seconds,
+# then writes its own marker.
+my $tree_script = write_file( $dir . '/tree.pl', <<'END' );
+my ( $parent_marker, $child_marker, $grandchild_marker ) = @ARGV;
+my $marker = $parent_marker;
+if ( !fork() ) {
+    $marker = $child_marker;
+    if ( !fork() ) {
+        $marker = $grandchild_marker;
+    }
+}
+sleep 3;
+open( my $fh, '>', $marker );
+exit 0;
+END
+
 # daemon.pl starts a child that keeps stdout open for 5 seconds, then exits right away.
 my $daemon_script = write_file( $dir . '/daemon.pl', <<'END' );
 if ( !fork() ) {
@@ -552,6 +568,58 @@ sub run_and_kill_during_restart {
 
     sleep 4;
     ok( -e $marker, 'timed out restart was left running, not killed' );
+}
+
+#
+# timeout_signal, with and without kill_sub_pids
+#
+{
+    # Runs tree.pl as a restart with the given options and command suffix,
+    # then returns the restart's result and which markers exist once it
+    # would have finished.
+    my $run_tree = sub {
+        my ( $options, $suffix ) = @_;
+        reset_all();
+        set_check( 'c1', 2 );
+        my @markers = map { $dir . '/tree.' . $_ . '.marker' } ( 'parent', 'child', 'grandchild' );
+        unlink(@markers);
+        my $config
+            = check_line('c1') . '@r1|checks=c1 timeout=1 '
+            . $options . '|'
+            . $perl . ' '
+            . $tree_script . ' '
+            . join( ' ', @markers )
+            . $suffix . "\n";
+        my $start = Time::HiRes::time;
+        my $ret   = new_sneck($config)->run;
+        ok( Time::HiRes::time - $start < 3, 'gave up at the timeout with ' . $options );
+        sleep 4;
+        return ( $ret, [ map { -e $_ ? 1 : 0 } @markers ] );
+    };
+
+    my ( $ret, $markers ) = $run_tree->( 'timeout_signal=TERM', '' );
+    my $r1 = $ret->{data}{restarts}{r1};
+    is( $r1->{error}, 'timed out after 1 seconds, sent SIGTERM', 'timeout error says the signal was sent' );
+    is( $r1->{exit},  -1,                                        'signaled timeout exit is -1' );
+    like(
+        $ret->{data}{alertString},
+        qr/^restart "r1" failed, timed out after 1 seconds, sent SIGTERM$/m,
+        'signaled timeout in alertString'
+    );
+    is_deeply( $markers, [ 0, 0, 0 ], 'command and all sub pids killed' );
+
+    ( $ret, $markers ) = $run_tree->( 'timeout_signal=TERM kill_sub_pids=0', '' );
+    is( $ret->{data}{restarts}{r1}{error}, 'timed out after 1 seconds, sent SIGTERM', 'kill_sub_pids=0 error' );
+    is_deeply( $markers, [ 0, 1, 1 ], 'kill_sub_pids=0 kills only the command' );
+
+    # the ; makes open3 run it via /bin/sh, so the PID is the shell
+    ( $ret, $markers ) = $run_tree->( 'timeout_signal=TERM', '; exit 0' );
+    is( $ret->{data}{restarts}{r1}{error}, 'timed out after 1 seconds, sent SIGTERM', 'shell wrapped error' );
+    is_deeply( $markers, [ 0, 0, 0 ], 'shell wrapped command and all sub pids killed' );
+
+    ( $ret, $markers ) = $run_tree->( 'kill_sub_pids=1', '' );
+    is( $ret->{data}{restarts}{r1}{error}, 'timed out after 1 seconds', 'kill_sub_pids alone sends nothing' );
+    is_deeply( $markers, [ 1, 1, 1 ], 'kill_sub_pids alone leaves everything running' );
 }
 
 #

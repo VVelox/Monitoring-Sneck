@@ -269,7 +269,7 @@ sub warning_list {
     my $config = parse_raw( "a|/bin/true\nb|/bin/true\n"
             . "\@plain|checks=a|/usr/sbin/service foo restart | /bin/cat\n"
             . "\@full|checks=a,b threshold=2 depends=plain cascade=1 ignore_unknown=0 ignore_errored=0"
-            . " min_interval=0 max_retries=3 timeout=60|  /usr/sbin/service bar restart\n"
+            . " min_interval=0 max_retries=3 timeout=60 timeout_signal=sigterm kill_sub_pids=0|  /usr/sbin/service bar restart\n"
             . "\@tabbed|\tchecks=b\t\ttimeout=5 |/bin/true\n" );
     ok( $config->is_valid, 'restarts valid' ) or diag( explain( error_list($config) ) );
     is_deeply(
@@ -286,6 +286,8 @@ sub warning_list {
                 min_interval   => 180,
                 max_retries    => 0,
                 timeout        => 30,
+                timeout_signal => undef,
+                kill_sub_pids  => 1,
             },
             full => {
                 command        => '/usr/sbin/service bar restart',
@@ -298,6 +300,8 @@ sub warning_list {
                 min_interval   => 0,
                 max_retries    => 3,
                 timeout        => 60,
+                timeout_signal => 'TERM',
+                kill_sub_pids  => 0,
             },
             tabbed => {
                 command        => '/bin/true',
@@ -310,6 +314,8 @@ sub warning_list {
                 min_interval   => 180,
                 max_retries    => 0,
                 timeout        => 5,
+                timeout_signal => undef,
+                kill_sub_pids  => 1,
             },
         },
         'restarts parsed with defaults filled in, later | kept in command'
@@ -341,7 +347,10 @@ sub warning_list {
             . "\@too_high|checks=a,b threshold=3|/bin/true\n"
             . "\@no_command|checks=a|\n"
             . "\@blank_command|checks=a|   \n"
-            . "\@one_pipe|checks=a\n" );
+            . "\@one_pipe|checks=a\n"
+            . "\@zero_signal|checks=a timeout_signal=0 kill_sub_pids=2|/bin/true\n"
+            . "\@bad_signal|checks=a timeout_signal=NOPE|/bin/true\n"
+            . "\@empty_signal|checks=a timeout_signal=|/bin/true\n" );
     ok( !$config->is_valid, 'restart errors make config invalid' );
     is_deeply(
         error_list($config),
@@ -367,10 +376,36 @@ sub warning_list {
             '15: restart "no_command" has no command',
             '16: restart "blank_command" has no command',
             '17: "@one_pipe|checks=a" is not a understood line',
+            '18: restart "zero_signal" option "kill_sub_pids" must be 0 or 1',
+            '18: restart "zero_signal" option "timeout_signal" must be a signal name or a signal number other than 0',
+            '19: restart "bad_signal" option "timeout_signal" must be a signal name or a signal number other than 0',
+            '20: restart "empty_signal" option "timeout_signal" must be a signal name or a signal number other than 0',
         ],
         'every restart error reported with its line'
     );
     is_deeply( [ sort keys %{ $config->restarts } ], ['ok'], 'only the good restart kept' );
+}
+
+#
+# timeout_signal forms
+#
+{
+    my $config = parse_raw( "a|/bin/true\n"
+            . "\@bare|checks=a timeout_signal=HUP|/bin/true\n"
+            . "\@prefixed|checks=a timeout_signal=SIGHUP|/bin/true\n"
+            . "\@lower|checks=a timeout_signal=sighup|/bin/true\n"
+            . "\@number|checks=a timeout_signal=15|/bin/true\n"
+            . "\@zero_name|checks=a timeout_signal=ZERO|/bin/true\n" );
+    is_deeply(
+        error_list($config),
+        ['6: restart "zero_name" option "timeout_signal" must be a signal name or a signal number other than 0'],
+        'ZERO rejected the same as 0'
+    );
+    my $restarts = $config->restarts;
+    is( $restarts->{bare}{timeout_signal},     'HUP',  'bare signal name' );
+    is( $restarts->{prefixed}{timeout_signal}, 'HUP',  'SIG prefix removed' );
+    is( $restarts->{lower}{timeout_signal},    'HUP',  'lower case signal name' );
+    is( $restarts->{number}{timeout_signal},   'TERM', 'signal number turned into a name' );
 }
 
 #

@@ -261,6 +261,16 @@ Options are as below.
       pkill, deepest first. Does nothing without timeout_signal.
       Default :: 1
 
+    - check_restart :: If 1, its checks are rerun after the command
+      finishes and their results replace the earlier ones in what is
+      returned. If they still meet the threshold, the restart counts
+      as failed, the same as the command failing.
+      Default :: 0
+
+    - check_restart_delay :: Seconds to wait after the command finishes
+      before rerunning its checks. Does nothing without check_restart.
+      Default :: 5
+
 Critical always counts as failed. Ok and warning never do.
 
 The 0/1 options also take true and false in YAML.
@@ -268,6 +278,25 @@ The 0/1 options also take true and false in YAML.
 Restart commands get variables put in place the same as checks. A
 restart does not wait for its output to be closed once its command has
 exited, so a daemon started by it holding stdout open is fine.
+
+The command is also given the environment variables below, describing
+why it is running.
+
+    - SNECK_RESTART :: The name of the restart.
+
+    - SNECK_REASON :: Either 'threshold' or 'cascade'.
+
+    - SNECK_CASCADE_FROM :: The depend it cascaded from, or empty.
+
+    - SNECK_FAILED_CHECKS :: Comma separated list of its checks that
+      counted as failed. May be empty for a cascade.
+
+    - SNECK_CHECKS :: Comma separated list of the checks it watches.
+
+    - SNECK_THRESHOLD :: The threshold.
+
+    - SNECK_ATTEMPTS :: Runs for its threshold since its checks last
+      recovered, this one included.
 
     @httpd|checks=http_check,php_check threshold=2 depends=php_fpm cascade=1 timeout=60|/usr/sbin/service apache24 restart
 
@@ -280,7 +309,7 @@ exited, so a daemon started by it holding stdout open is fine.
         cascade: true
         timeout: 60
 
-    @php_fpm|checks=php_check timeout=60 timeout_signal=TERM|/usr/sbin/service php_fpm restart
+    @php_fpm|checks=php_check timeout=60 timeout_signal=TERM check_restart=1|/usr/sbin/service php_fpm restart
 
     restarts:
       php_fpm:
@@ -288,6 +317,7 @@ exited, so a daemon started by it holding stdout open is fine.
         checks: [php_check]
         timeout: 60
         timeout_signal: TERM
+        check_restart: true
 
 =head1 METHODS
 
@@ -554,7 +584,8 @@ This is a copy, so changing it does not change the config.
     - depends :: Array ref of the names of the restarts depended on.
 
     - threshold, cascade, ignore_unknown, ignore_errored, min_interval,
-      max_retries, timeout, kill_sub_pids :: As described under
+      max_retries, timeout, kill_sub_pids, check_restart,
+      check_restart_delay :: As described under
       RESTARTS. The 0/1 options are always 0 or 1.
 
     - timeout_signal :: The signal name without the SIG prefix, such as
@@ -906,7 +937,7 @@ sub _add_command {
 #     # { command => '/usr/sbin/service apache24 restart', checks => [ 'http_check', 'php_check' ],
 #     #   depends => [], threshold => 2, cascade => 0, ignore_unknown => 1, ignore_errored => 1,
 #     #   min_interval => 180, max_retries => 0, timeout => 30, timeout_signal => undef,
-#     #   kill_sub_pids => 1 }
+#     #   kill_sub_pids => 1, check_restart => 0, check_restart_delay => 5 }
 sub _add_restart {
 	my ( $self, $name, $command, $options, $location ) = @_;
 
@@ -953,7 +984,7 @@ sub _add_restart {
 		$self->_add_problem( 'errors', $location, $label . ' has no checks' );
 	}
 
-	foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids' ) {
+	foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids', 'check_restart' ) {
 		if ( !exists( $options->{$key} ) ) {
 			next;
 		}
@@ -963,7 +994,7 @@ sub _add_restart {
 			next;
 		}
 		$restart{$key} = $value ? 1 : 0;
-	} ## end foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids' )
+	} ## end foreach my $key ( 'cascade', 'ignore_unknown', 'ignore_errored', 'kill_sub_pids', 'check_restart' )
 
 	if ( exists( $options->{timeout_signal} ) ) {
 		my $signal = $self->_signal_name( $options->{timeout_signal} );
@@ -975,7 +1006,7 @@ sub _add_restart {
 		}
 	}
 
-	my %minimums = ( threshold => 1, min_interval => 0, max_retries => 0, timeout => 1 );
+	my %minimums = ( threshold => 1, min_interval => 0, max_retries => 0, timeout => 1, check_restart_delay => 0 );
 	foreach my $key ( sort( keys(%minimums) ) ) {
 		if ( !exists( $options->{$key} ) ) {
 			next;
@@ -1035,17 +1066,19 @@ sub _add_restart {
 #     # $restart{threshold} is 1 and $restart{min_interval} is 180
 sub _restart_defaults {
 	return {
-		checks         => [],
-		depends        => [],
-		threshold      => 1,
-		cascade        => 0,
-		ignore_unknown => 1,
-		ignore_errored => 1,
-		min_interval   => 180,
-		max_retries    => 0,
-		timeout        => 30,
-		timeout_signal => undef,
-		kill_sub_pids  => 1,
+		checks              => [],
+		depends             => [],
+		threshold           => 1,
+		cascade             => 0,
+		ignore_unknown      => 1,
+		ignore_errored      => 1,
+		min_interval        => 180,
+		max_retries         => 0,
+		timeout             => 30,
+		timeout_signal      => undef,
+		kill_sub_pids       => 1,
+		check_restart       => 0,
+		check_restart_delay => 5,
 	};
 } ## end sub _restart_defaults
 

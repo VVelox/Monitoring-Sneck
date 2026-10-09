@@ -111,6 +111,10 @@ For below '$name' is the name of the check in question.
 
     - $hash{data}{checks}{$name}{run_time} :: How long it took to run the checks.
 
+    - $hash{data}{checks}{$name}{rechecked_by} :: Only present if it was
+      rerun after a restart with check_restart set. The name of that
+      restart. The rest of the results are from the rerun.
+
 For below '$name' is the name of the debug checks in question.
 
     - $hash{data}{debugs}{$name} :: A hash with info on the checks ran.
@@ -164,12 +168,21 @@ The rest are only present if it ran.
     - $hash{data}{restarts}{$name}{error} :: Only present if it timed
       out, died on a signal, or could not be executed. If it timed out
       and timeout_signal is set, also says the signal was sent, plus
-      any problems sending it.
+      any problems sending it. Also present if check_restart is set,
+      the command exited 0, and its checks still met the threshold
+      afterwards.
 
-    - $hash{data}{restarts}{$name}{run_time} :: How long it took to run.
+    - $hash{data}{restarts}{$name}{run_time} :: How long the command
+      took to run, not counting check_restart.
 
-A restart that ran and failed, including timing out, sets alert and adds
-a line to alertString along with any output from the command.
+    - $hash{data}{restarts}{$name}{recheck_failed_checks} :: Only present
+      if check_restart is set. Array of the watched checks that still
+      counted as failed when rerun.
+
+A restart that ran and failed, including timing out or its checks still
+failing with check_restart, sets alert and adds a line to alertString
+along with any output from the command. Check results, counts, and
+alertString reflect any checks rerun by check_restart.
 
 =head1 METHODS
 
@@ -244,6 +257,8 @@ sub new {
 		debug         => 0,
 		restart       => 0,
 		state_file    => '/var/cache/sneck.cache.restarts',
+		# alertString lines from failed restarts, added after the checks by _tally_checks
+		restart_alerts => [],
 	};
 	bless $self;
 
@@ -334,6 +349,7 @@ sub run {
 	$self->{to_return}{data}{restarts}    = {};
 	$self->{to_return}{data}{restarted}   = 0;
 	delete( $self->{to_return}{data}{restart_state_error} );
+	$self->{restart_alerts} = [];
 
 	# set the time it ran
 	$self->{to_return}{data}{time} = time;
@@ -351,143 +367,12 @@ sub run {
 	}
 
 	foreach my $item (@to_run) {
-		my ( $type, $name, $check ) = @{$item};
-
-		my $check_start_time = Time::HiRes::time;
-		if ( $self->{debug} ) {
-			warn( $name . ' processing started at ' . $check_start_time );
-		}
-
-		if ( $self->{debug} ) {
-			warn( $name . ' is of type ' . $type );
-		}
-
-		$self->{to_return}{data}{$type}{$name} = { check => $check };
-
-		if ( $self->{debug} ) {
-			warn( $name . ' check string: "' . $check . '"' );
-		}
-
-		# put the variables in place
-		$check = $parsed_config->substitute($check);
-		$self->{to_return}{data}{$type}{$name}{ran} = $check;
-		if ( $self->{debug} ) {
-			warn( $name . ' check string post variable replacement: "' . $check . '"' );
-		}
-
-		my $exit_code;
-		eval {
-			my $check_pid = open3( my $std_in, my $std_out, my $std_err = gensym, $check );
-			# nothing is ever sent, so close it so checks reading stdin get EOF instead of hanging
-			close($std_in);
-			if ( $self->{debug} ) {
-				warn( $name . ' open3 called' );
-			}
-
-			my $s = IO::Select->new();
-			$s->add($std_out);
-			$s->add($std_err);
-			my $output = '';
-			while ( my @ready = $s->can_read ) {
-				foreach my $handle (@ready) {
-					if ( sysread( $handle, my $buf, 4096 ) ) {
-						$output = $output . $buf;
-					} else {
-						$s->remove($handle);
-					}
-				}
-			}
-
-			if ( $self->{debug} ) {
-				warn( $name . ' IO::Select for open3 done... output is... "' . $output . '"' );
-			}
-
-			# call wait pid so we can get the exit code
-			waitpid( $check_pid, 0 );
-			$exit_code = $?;
-			$self->{to_return}{data}{$type}{$name}{output} = $output;
-			if ( defined( $self->{to_return}{data}{$type}{$name}{output} ) ) {
-				chomp( $self->{to_return}{data}{$type}{$name}{output} );
-			}
-		};
-		if ($@) {
-			$exit_code = -1;
-			$self->{to_return}{data}{$type}{$name}{output} = $@;
-			chomp( $self->{to_return}{data}{$type}{$name}{output} );
-		}
-
-		# handle the exit code
-		if ( $exit_code == -1 ) {
-			$self->{to_return}{data}{$type}{$name}{error} = 'failed to execute';
-		} elsif ( $exit_code & 127 ) {
-			$self->{to_return}{data}{$type}{$name}{error} = sprintf(
-				"child died with signal %d, %s coredump\n",
-				( $exit_code & 127 ),
-				( $exit_code & 128 ) ? 'with' : 'without'
-			);
-			# use the shell convention of 128 + signal so a signal death is never
-			# mistaken for a nagios exit code of 0 to 3 and is counted as errored
-			$exit_code = 128 + ( $exit_code & 127 );
-		} else {
-			$exit_code = $exit_code >> 8;
-		}
-		$self->{to_return}{data}{$type}{$name}{exit} = $exit_code;
-
-		if ( $self->{debug} ) {
-			warn( $name . ' exit code is ' . $exit_code );
-		}
-
-		# anything other than 0, 1, 2, or 3 is a error
-		if ( $type eq 'checks' ) {
-			if ( $self->{to_return}{data}{checks}{$name}{exit} == 0 ) {
-				$self->{to_return}{data}{ok}++;
-				if ( $self->{debug} ) {
-					warn( $name . ' is ok' );
-				}
-			} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 1 ) {
-				$self->{to_return}{data}{warning}++;
-				$self->{to_return}{data}{alert} = 1;
-				if ( $self->{debug} ) {
-					warn( $name . ' is warning' );
-				}
-			} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 2 ) {
-				$self->{to_return}{data}{critical}++;
-				$self->{to_return}{data}{alert} = 1;
-				if ( $self->{debug} ) {
-					warn( $name . ' is critical' );
-				}
-			} elsif ( $self->{to_return}{data}{checks}{$name}{exit} == 3 ) {
-				$self->{to_return}{data}{unknown}++;
-				$self->{to_return}{data}{alert} = 1;
-				if ( $self->{debug} ) {
-					warn( $name . ' is unknown' );
-				}
-			} else {
-				$self->{to_return}{data}{errored}++;
-				$self->{to_return}{data}{alert} = 1;
-				if ( $self->{debug} ) {
-					warn( $name . ' is errored' );
-				}
-			}
-
-			# add it to the alert string if it is a warning
-			if ( $exit_code == 1 || $exit_code == 2 || $exit_code == 3 ) {
-				$self->{to_return}{data}{alertString}
-					= $self->{to_return}{data}{alertString} . $self->{to_return}{data}{checks}{$name}{output} . "\n";
-			}
-		} ## end if ( $type eq 'checks' )
-
-		# figure out how long the run took
-		my $check_stop_time = Time::HiRes::time;
-		if ( $self->{debug} ) {
-			warn( $name . ' finished at ' . $check_stop_time );
-		}
-		my $check_time = $check_stop_time - $check_start_time;
-		# round to the 9th place to avoid scientific notation
-		$self->{to_return}{data}{$type}{$name}{run_time} = sprintf( '%.9f', $check_time );
-	} ## end foreach my $item (@to_run)
+		$self->_run_check( @{$item} );
+	}
 
 	$self->_handle_restarts;
+
+	$self->_tally_checks;
 
 	$self->{to_return}{data}{vars} = $parsed_config->vars;
 
@@ -511,11 +396,179 @@ sub run {
 	return $self->{to_return};
 } ## end sub run
 
+# Runs a single check or debug check and stores its results, replacing any
+# earlier results for it. Used by run, and by _run_restart to rerun checks
+# for check_restart. Does not count it towards ok, warning, and the like.
+# That is done by _tally_checks once everything has run.
+#
+# Args...
+#
+#     - type :: Either 'checks' or 'debugs'.
+#
+#     - name :: The name of the check.
+#
+#     - check :: The command, before variable substitution.
+#
+# Returns nothing. Results go in $self->{to_return}{data}{$type}{$name} as
+# a hash ref of check, ran, output, exit, error if any, and run_time, as
+# described under RETURN HASH.
+#
+# Example...
+#
+#     $self->_run_check( 'checks', 'http_check', '/usr/local/libexec/nagios/check_http -H %HOST%' );
+#     # $self->{to_return}{data}{checks}{http_check} is
+#     # { check => '...', ran => '...', output => 'HTTP OK...', exit => 0, run_time => '0.012345678' }
+sub _run_check {
+	my ( $self, $type, $name, $check ) = @_;
+
+	my $check_start_time = Time::HiRes::time;
+	if ( $self->{debug} ) {
+		warn( $name . ' processing started at ' . $check_start_time );
+		warn( $name . ' is of type ' . $type );
+	}
+
+	my $result = { check => $check };
+	$self->{to_return}{data}{$type}{$name} = $result;
+
+	if ( $self->{debug} ) {
+		warn( $name . ' check string: "' . $check . '"' );
+	}
+
+	# put the variables in place
+	$check = $self->{parsed_config}->substitute($check);
+	$result->{ran} = $check;
+	if ( $self->{debug} ) {
+		warn( $name . ' check string post variable replacement: "' . $check . '"' );
+	}
+
+	my $exit_code;
+	eval {
+		my $check_pid = open3( my $std_in, my $std_out, my $std_err = gensym, $check );
+		# nothing is ever sent, so close it so checks reading stdin get EOF instead of hanging
+		close($std_in);
+		if ( $self->{debug} ) {
+			warn( $name . ' open3 called' );
+		}
+
+		my $s = IO::Select->new();
+		$s->add($std_out);
+		$s->add($std_err);
+		my $output = '';
+		while ( my @ready = $s->can_read ) {
+			foreach my $handle (@ready) {
+				if ( sysread( $handle, my $buf, 4096 ) ) {
+					$output = $output . $buf;
+				} else {
+					$s->remove($handle);
+				}
+			}
+		}
+
+		if ( $self->{debug} ) {
+			warn( $name . ' IO::Select for open3 done... output is... "' . $output . '"' );
+		}
+
+		# call wait pid so we can get the exit code
+		waitpid( $check_pid, 0 );
+		$exit_code = $?;
+		$result->{output} = $output;
+		chomp( $result->{output} );
+	};
+	if ($@) {
+		$exit_code = -1;
+		$result->{output} = $@;
+		chomp( $result->{output} );
+	}
+
+	# handle the exit code
+	if ( $exit_code == -1 ) {
+		$result->{error} = 'failed to execute';
+	} elsif ( $exit_code & 127 ) {
+		$result->{error} = sprintf(
+			"child died with signal %d, %s coredump\n",
+			( $exit_code & 127 ),
+			( $exit_code & 128 ) ? 'with' : 'without'
+		);
+		# use the shell convention of 128 + signal so a signal death is never
+		# mistaken for a nagios exit code of 0 to 3 and is counted as errored
+		$exit_code = 128 + ( $exit_code & 127 );
+	} else {
+		$exit_code = $exit_code >> 8;
+	}
+	$result->{exit} = $exit_code;
+
+	if ( $self->{debug} ) {
+		warn( $name . ' exit code is ' . $exit_code );
+	}
+
+	# figure out how long the run took
+	my $check_stop_time = Time::HiRes::time;
+	if ( $self->{debug} ) {
+		warn( $name . ' finished at ' . $check_stop_time );
+	}
+	# round to the 9th place to avoid scientific notation
+	$result->{run_time} = sprintf( '%.9f', $check_stop_time - $check_start_time );
+
+	return;
+} ## end sub _run_check
+
+# Counts the check results into ok, warning, critical, unknown, and
+# errored, and builds alert and alertString from them. Anything other than
+# exit 0 sets alert. Output of warning, critical, and unknown checks is
+# added to alertString in name order, followed by the lines for failed
+# restarts in $self->{restart_alerts}, which also set alert. Called by run
+# once checks and restarts are done, so rerun checks are counted with
+# their final results.
+#
+# Takes no args and returns nothing. Results go in $self->{to_return}{data}.
+#
+# Example...
+#
+#     # http_check exited 2 and php_check exited 0
+#     $self->_tally_checks;
+#     # ok is 1, critical is 1, alert is 1, and alertString is the output of http_check plus "\n"
+sub _tally_checks {
+	my $self = $_[0];
+
+	my $data           = $self->{to_return}{data};
+	my %counts_by_exit = ( 0 => 'ok', 1 => 'warning', 2 => 'critical', 3 => 'unknown' );
+	foreach my $count ( 'ok', 'warning', 'critical', 'unknown', 'errored' ) {
+		$data->{$count} = 0;
+	}
+	$data->{alert}       = 0;
+	$data->{alertString} = '';
+
+	foreach my $name ( sort( keys( %{ $data->{checks} } ) ) ) {
+		my $exit_code = $data->{checks}{$name}{exit};
+		my $count     = defined( $counts_by_exit{$exit_code} ) ? $counts_by_exit{$exit_code} : 'errored';
+		$data->{$count}++;
+		if ( $self->{debug} ) {
+			warn( $name . ' is ' . $count );
+		}
+		if ( $count ne 'ok' ) {
+			$data->{alert} = 1;
+		}
+		# add it to the alert string if it is a warning, critical, or unknown
+		if ( $count ne 'ok' && $count ne 'errored' ) {
+			$data->{alertString} = $data->{alertString} . $data->{checks}{$name}{output} . "\n";
+		}
+	} ## end foreach my $name ( sort( keys( %{ $data->{checks} } ) ) )
+
+	foreach my $line ( @{ $self->{restart_alerts} } ) {
+		$data->{alert}       = 1;
+		$data->{alertString} = $data->{alertString} . $line;
+	}
+
+	return;
+} ## end sub _tally_checks
+
 # Works out which restarts triggered and, if restarts are enabled, runs
-# them. Called by run after all checks have run. Takes no args and returns
-# nothing. Results go in $self->{to_return}{data}{restarts} and
-# $self->{to_return}{data}{restarted}, and failures set alert and add to
-# alertString.
+# them. Called by run after all checks have run and before _tally_checks.
+# Takes no args and returns nothing. Results go in
+# $self->{to_return}{data}{restarts} and $self->{to_return}{data}{restarted},
+# and failures are added to $self->{restart_alerts}. Which restarts
+# triggered is worked out once, before any run, so checks rerun by
+# check_restart do not change it for the restarts after.
 #
 # Restarts run in dependency order. A restart runs if its threshold was
 # met, or if cascade is set and one of its depends ran without failing.
@@ -592,10 +645,11 @@ sub _handle_restarts {
 		}
 
 		my $run_reason;
+		my $cascade_from;
 		if ( $result->{triggered} ) {
 			$run_reason = 'threshold';
 		} elsif ( $restart->{cascade} ) {
-			my ($cascade_from) = grep { defined( $status{$_} ) && $status{$_} eq 'ok' } @{ $restart->{depends} };
+			($cascade_from) = grep { defined( $status{$_} ) && $status{$_} eq 'ok' } @{ $restart->{depends} };
 			if ( defined($cascade_from) ) {
 				$run_reason = 'cascade from ' . $cascade_from;
 			}
@@ -630,7 +684,7 @@ sub _handle_restarts {
 					$write_error = $error;
 				}
 
-				$self->_run_restart( $name, $restart, $result, $run_reason );
+				$self->_run_restart( $name, $restart, $result, $cascade_from, $state_item->{attempts} );
 
 				# min_interval is counted from when it finished
 				$state_item->{last_run} = int(time);
@@ -654,8 +708,12 @@ sub _handle_restarts {
 } ## end sub _handle_restarts
 
 # Runs a single restart and records the results. Used by _handle_restarts.
-# A failed restart sets alert and adds a line to alertString, along with
-# any output from the command.
+# The command gets the SNECK_* environment variables described under
+# RESTARTS in Monitoring::Sneck::Config. If check_restart is set, its
+# checks are then rerun via _run_check after check_restart_delay seconds.
+# A failed restart, including its checks still meeting the threshold
+# afterwards, adds a line to $self->{restart_alerts}, along with any
+# output from the command.
 #
 # Args...
 #
@@ -666,28 +724,49 @@ sub _handle_restarts {
 #
 #     - result :: Hash ref of the restart's entry in data.restarts, which
 #       is filled in with ran, reason, ran_command, output, exit, error if
-#       any, and run_time.
+#       any, run_time, and recheck_failed_checks if rechecked.
 #
-#     - reason :: Why it is running, either 'threshold' or
-#       'cascade from $name'.
+#     - cascade_from :: Name of the depend it is cascading from, or undef
+#       if it is running for its threshold.
+#
+#     - attempts :: Runs for its threshold since its checks last
+#       recovered, this one included. Passed on as SNECK_ATTEMPTS.
 #
 # Returns nothing.
 #
 # Example...
 #
-#     $self->_run_restart( 'httpd', $restarts->{httpd}, $data->{restarts}{httpd}, 'threshold' );
+#     $self->_run_restart( 'httpd', $restarts->{httpd}, $data->{restarts}{httpd}, undef, 1 );
 #     # $data->{restarts}{httpd}{ran} is 1 and $data->{restarted} went up by 1
+#
+#     $self->_run_restart( 'httpd', $restarts->{httpd}, $data->{restarts}{httpd}, 'php_fpm', 0 );
+#     # same, but reason is 'cascade from php_fpm' and SNECK_REASON was 'cascade'
 sub _run_restart {
-	my ( $self, $name, $restart, $result, $reason ) = @_;
+	my ( $self, $name, $restart, $result, $cascade_from, $attempts ) = @_;
 
+	my $reason      = defined($cascade_from) ? 'cascade from ' . $cascade_from : 'threshold';
 	my $start_time  = Time::HiRes::time;
 	my $ran_command = $self->{parsed_config}->substitute( $restart->{command} );
 	if ( $self->{debug} ) {
 		warn( 'restart ' . $name . ' running for ' . $reason . ': "' . $ran_command . '"' );
 	}
 
-	my $command_result = $self->_run_restart_command( $ran_command, $restart->{timeout}, $restart->{timeout_signal},
-		$restart->{kill_sub_pids} );
+	# tell the command why it is running
+	my %sneck_env = (
+		SNECK_RESTART       => $name,
+		SNECK_REASON        => defined($cascade_from) ? 'cascade'     : 'threshold',
+		SNECK_CASCADE_FROM  => defined($cascade_from) ? $cascade_from : '',
+		SNECK_FAILED_CHECKS => join( ',', @{ $result->{failed_checks} } ),
+		SNECK_CHECKS        => join( ',', @{ $restart->{checks} } ),
+		SNECK_THRESHOLD     => $restart->{threshold},
+		SNECK_ATTEMPTS      => $attempts,
+	);
+	my $command_result;
+	{
+		local @ENV{ keys(%sneck_env) } = values(%sneck_env);
+		$command_result = $self->_run_restart_command( $ran_command, $restart->{timeout}, $restart->{timeout_signal},
+			$restart->{kill_sub_pids} );
+	}
 
 	$result->{ran}         = 1;
 	$result->{reason}      = $reason;
@@ -700,14 +779,32 @@ sub _run_restart {
 	$result->{run_time} = sprintf( '%.9f', Time::HiRes::time - $start_time );
 	$self->{to_return}{data}{restarted}++;
 
+	if ( $restart->{check_restart} ) {
+		if ( $restart->{check_restart_delay} > 0 ) {
+			if ( $self->{debug} ) {
+				warn( 'restart ' . $name . ' waiting ' . $restart->{check_restart_delay} . ' seconds to recheck' );
+			}
+			sleep( $restart->{check_restart_delay} );
+		}
+		my $checks = $self->{parsed_config}->checks;
+		foreach my $check_name ( @{ $restart->{checks} } ) {
+			$self->_run_check( 'checks', $check_name, $checks->{$check_name} );
+			$self->{to_return}{data}{checks}{$check_name}{rechecked_by} = $name;
+		}
+		my @still_failed = grep { $self->_check_failed( $self->{to_return}{data}{checks}{$_}{exit}, $restart ) }
+			@{ $restart->{checks} };
+		$result->{recheck_failed_checks} = \@still_failed;
+		if ( scalar(@still_failed) >= $restart->{threshold} && !defined( $result->{error} ) ) {
+			$result->{error} = 'checks still failing after restart: ' . join( ', ', @still_failed );
+		}
+	} ## end if ( $restart->{check_restart} )
+
 	if ( defined( $result->{error} ) || $result->{exit} != 0 ) {
 		my $why = defined( $result->{error} ) ? $result->{error} : 'exit ' . $result->{exit};
 		if ( $result->{output} ne '' ) {
 			$why = $why . ': ' . $result->{output};
 		}
-		$self->{to_return}{data}{alert} = 1;
-		$self->{to_return}{data}{alertString}
-			= $self->{to_return}{data}{alertString} . 'restart "' . $name . '" failed, ' . $why . "\n";
+		push( @{ $self->{restart_alerts} }, 'restart "' . $name . '" failed, ' . $why . "\n" );
 	}
 
 	if ( $self->{debug} ) {

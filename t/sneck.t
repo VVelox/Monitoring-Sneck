@@ -478,9 +478,9 @@ SKIP: {
     ( $stdout, $exit_code ) = run_sneck('--version');
     is( $exit_code, 255, '--version exits 255' );
 
+    # output is not checked, as pod2usage hands off to perldoc, which renders differently per system
     ( $stdout, $exit_code ) = run_sneck('-h');
     is( $exit_code, 255, '-h exits 255' );
-    like( $stdout, qr/SYNOPSIS/, '-h prints the POD' );
 
     ( $stdout, $exit_code ) = run_sneck('--help');
     is( $exit_code, 255, '--help exits 255' );

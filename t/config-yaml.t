@@ -312,42 +312,48 @@ if ( !$have_yaml ) {
             . "    max_retries: 3\n"
             . "    timeout: 60\n"
             . "    timeout_signal: 9\n"
-            . "    kill_sub_pids: false\n" );
+            . "    kill_sub_pids: false\n"
+            . "    check_restart: true\n"
+            . "    check_restart_delay: 0\n" );
     ok( $config->is_valid, 'YAML restarts valid' ) or diag( explain( error_list($config) ) );
     my $restarts = $config->restarts;
     is_deeply(
         $restarts->{plain},
         {
-            command        => '/usr/sbin/service foo restart',
-            checks         => ['a'],
-            depends        => [],
-            threshold      => 1,
-            cascade        => 0,
-            ignore_unknown => 1,
-            ignore_errored => 1,
-            min_interval   => 180,
-            max_retries    => 0,
-            timeout        => 30,
-            timeout_signal => undef,
-            kill_sub_pids  => 1,
+            command             => '/usr/sbin/service foo restart',
+            checks              => ['a'],
+            depends             => [],
+            threshold           => 1,
+            cascade             => 0,
+            ignore_unknown      => 1,
+            ignore_errored      => 1,
+            min_interval        => 180,
+            max_retries         => 0,
+            timeout             => 30,
+            timeout_signal      => undef,
+            kill_sub_pids       => 1,
+            check_restart       => 0,
+            check_restart_delay => 5,
         },
         'YAML restart defaults'
     );
     is_deeply(
         $restarts->{full},
         {
-            command        => '/usr/sbin/service bar restart %NOPE%',
-            checks         => [ 'a', 'b' ],
-            depends        => ['plain'],
-            threshold      => 2,
-            cascade        => 1,
-            ignore_unknown => 0,
-            ignore_errored => 0,
-            min_interval   => 0,
-            max_retries    => 3,
-            timeout        => 60,
-            timeout_signal => 'KILL',
-            kill_sub_pids  => 0,
+            command             => '/usr/sbin/service bar restart %NOPE%',
+            checks              => [ 'a', 'b' ],
+            depends             => ['plain'],
+            threshold           => 2,
+            cascade             => 1,
+            ignore_unknown      => 0,
+            ignore_errored      => 0,
+            min_interval        => 0,
+            max_retries         => 3,
+            timeout             => 60,
+            timeout_signal      => 'KILL',
+            kill_sub_pids       => 0,
+            check_restart       => 1,
+            check_restart_delay => 0,
         },
         'YAML restart options, true and false work for 0/1 options'
     );
@@ -448,6 +454,8 @@ if ( !$have_yaml ) {
             . "    ignore_errored: ~\n"
             . "    timeout_signal: ~\n"
             . "    kill_sub_pids: [1]\n"
+            . "    check_restart: 2\n"
+            . "    check_restart_delay: -1\n"
             . "  list_signal:\n"
             . "    command: /bin/true\n"
             . "    checks: [a]\n"
@@ -459,7 +467,9 @@ if ( !$have_yaml ) {
             'restarts.bad_values: restart "bad_values" option "ignore_unknown" must be 0 or 1',
             'restarts.bad_values: restart "bad_values" option "ignore_errored" must be 0 or 1',
             'restarts.bad_values: restart "bad_values" option "kill_sub_pids" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "check_restart" must be 0 or 1',
             'restarts.bad_values: restart "bad_values" option "timeout_signal" must be a signal name or a signal number other than 0',
+            'restarts.bad_values: restart "bad_values" option "check_restart_delay" must be a whole number of at least 0',
             'restarts.bad_values: restart "bad_values" option "max_retries" must be a whole number of at least 0',
             'restarts.bad_values: restart "bad_values" option "min_interval" must be a whole number of at least 0',
             'restarts.bad_values: restart "bad_values" option "threshold" must be a whole number of at least 1',

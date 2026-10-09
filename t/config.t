@@ -269,53 +269,59 @@ sub warning_list {
     my $config = parse_raw( "a|/bin/true\nb|/bin/true\n"
             . "\@plain|checks=a|/usr/sbin/service foo restart | /bin/cat\n"
             . "\@full|checks=a,b threshold=2 depends=plain cascade=1 ignore_unknown=0 ignore_errored=0"
-            . " min_interval=0 max_retries=3 timeout=60 timeout_signal=sigterm kill_sub_pids=0|  /usr/sbin/service bar restart\n"
+            . " min_interval=0 max_retries=3 timeout=60 timeout_signal=sigterm kill_sub_pids=0 check_restart=1 check_restart_delay=0|  /usr/sbin/service bar restart\n"
             . "\@tabbed|\tchecks=b\t\ttimeout=5 |/bin/true\n" );
     ok( $config->is_valid, 'restarts valid' ) or diag( explain( error_list($config) ) );
     is_deeply(
         $config->restarts,
         {
             plain => {
-                command        => '/usr/sbin/service foo restart | /bin/cat',
-                checks         => ['a'],
-                depends        => [],
-                threshold      => 1,
-                cascade        => 0,
-                ignore_unknown => 1,
-                ignore_errored => 1,
-                min_interval   => 180,
-                max_retries    => 0,
-                timeout        => 30,
-                timeout_signal => undef,
-                kill_sub_pids  => 1,
+                command             => '/usr/sbin/service foo restart | /bin/cat',
+                checks              => ['a'],
+                depends             => [],
+                threshold           => 1,
+                cascade             => 0,
+                ignore_unknown      => 1,
+                ignore_errored      => 1,
+                min_interval        => 180,
+                max_retries         => 0,
+                timeout             => 30,
+                timeout_signal      => undef,
+                kill_sub_pids       => 1,
+                check_restart       => 0,
+                check_restart_delay => 5,
             },
             full => {
-                command        => '/usr/sbin/service bar restart',
-                checks         => [ 'a', 'b' ],
-                depends        => ['plain'],
-                threshold      => 2,
-                cascade        => 1,
-                ignore_unknown => 0,
-                ignore_errored => 0,
-                min_interval   => 0,
-                max_retries    => 3,
-                timeout        => 60,
-                timeout_signal => 'TERM',
-                kill_sub_pids  => 0,
+                command             => '/usr/sbin/service bar restart',
+                checks              => [ 'a', 'b' ],
+                depends             => ['plain'],
+                threshold           => 2,
+                cascade             => 1,
+                ignore_unknown      => 0,
+                ignore_errored      => 0,
+                min_interval        => 0,
+                max_retries         => 3,
+                timeout             => 60,
+                timeout_signal      => 'TERM',
+                kill_sub_pids       => 0,
+                check_restart       => 1,
+                check_restart_delay => 0,
             },
             tabbed => {
-                command        => '/bin/true',
-                checks         => ['b'],
-                depends        => [],
-                threshold      => 1,
-                cascade        => 0,
-                ignore_unknown => 1,
-                ignore_errored => 1,
-                min_interval   => 180,
-                max_retries    => 0,
-                timeout        => 5,
-                timeout_signal => undef,
-                kill_sub_pids  => 1,
+                command             => '/bin/true',
+                checks              => ['b'],
+                depends             => [],
+                threshold           => 1,
+                cascade             => 0,
+                ignore_unknown      => 1,
+                ignore_errored      => 1,
+                min_interval        => 180,
+                max_retries         => 0,
+                timeout             => 5,
+                timeout_signal      => undef,
+                kill_sub_pids       => 1,
+                check_restart       => 0,
+                check_restart_delay => 5,
             },
         },
         'restarts parsed with defaults filled in, later | kept in command'
@@ -342,8 +348,8 @@ sub warning_list {
             . "\@twice|checks=a checks=b|/bin/true\n"
             . "\@bad_names|checks=a,,b-c depends=x.y|/bin/true\n"
             . "\@dupe|checks=a,a|/bin/true\n"
-            . "\@bools|checks=a cascade=2 ignore_unknown=yes ignore_errored=-1|/bin/true\n"
-            . "\@numbers|checks=a threshold=0 min_interval=-1 max_retries=x timeout=0|/bin/true\n"
+            . "\@bools|checks=a cascade=2 ignore_unknown=yes ignore_errored=-1 check_restart=x|/bin/true\n"
+            . "\@numbers|checks=a threshold=0 min_interval=-1 max_retries=x timeout=0 check_restart_delay=-1|/bin/true\n"
             . "\@too_high|checks=a,b threshold=3|/bin/true\n"
             . "\@no_command|checks=a|\n"
             . "\@blank_command|checks=a|   \n"
@@ -368,6 +374,8 @@ sub warning_list {
             '12: restart "bools" option "cascade" must be 0 or 1',
             '12: restart "bools" option "ignore_unknown" must be 0 or 1',
             '12: restart "bools" option "ignore_errored" must be 0 or 1',
+            '12: restart "bools" option "check_restart" must be 0 or 1',
+            '13: restart "numbers" option "check_restart_delay" must be a whole number of at least 0',
             '13: restart "numbers" option "max_retries" must be a whole number of at least 0',
             '13: restart "numbers" option "min_interval" must be a whole number of at least 0',
             '13: restart "numbers" option "threshold" must be a whole number of at least 1',

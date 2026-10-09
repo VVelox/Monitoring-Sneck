@@ -156,6 +156,24 @@ END
 # env.pl prints the value of SNECK_RESTART_TEST.
 my $env_script = write_file( $dir . '/env.pl', "print \$ENV{SNECK_RESTART_TEST};\n" );
 
+# sneck_env.pl prints the SNECK_* variables, one per line, as name=value.
+my $sneck_env_script = write_file( $dir . '/sneck_env.pl', <<'END' );
+foreach my $var (qw(SNECK_RESTART SNECK_REASON SNECK_CASCADE_FROM SNECK_FAILED_CHECKS SNECK_CHECKS SNECK_THRESHOLD SNECK_ATTEMPTS)) {
+    print $var . '=' . ( defined( $ENV{$var} ) ? $ENV{$var} : 'undef' ) . "\n";
+}
+END
+
+# fix.pl logs its name, removes the given flag files so those checks are ok
+# again, then exits with the given code.
+my $fix_script = write_file( $dir . '/fix.pl', <<'END' );
+my ( $name, $log, $code, @flags ) = @ARGV;
+open( my $fh, '>>', $log ) or die($!);
+print $fh $name . "\n";
+close($fh);
+unlink(@flags);
+exit $code;
+END
+
 # Sets what a check exits with on its next run. undef means ok.
 sub set_check {
     my ( $name, $code ) = @_;
@@ -187,6 +205,22 @@ sub restart_line {
         . $log . ' '
         . ( defined($exit_code) ? $exit_code : 0 )
         . ( $sleep ? ' ' . $sleep : '' ) . "\n";
+}
+
+# Returns a config line for a restart that removes the flags of the given
+# checks, making them ok, and exits with the given code.
+sub fix_line {
+    my ( $name, $options, $exit_code, @checks ) = @_;
+    return
+          '@'
+        . $name . '|'
+        . $options . '|'
+        . $perl . ' '
+        . $fix_script . ' '
+        . $name . ' '
+        . $log . ' '
+        . $exit_code . ' '
+        . join( ' ', map { $dir . '/' . $_ . '.flag' } @checks ) . "\n";
 }
 
 # Returns the names logged by restarts since the last reset.
@@ -1212,6 +1246,172 @@ SKIP: {
     is( $ret->{data}{restarts}{r_sig}{triggered},        0,        'signal ignored by default' );
     is( $ret->{data}{restarts}{r_sig_counted}{triggered}, 1,       'signal counts with ignore_errored=0' );
     is_deeply( restarts_logged(), ['r_sig_counted'], 'only the restart counting errored ran' );
+}
+
+#
+# SNECK_* variables for a threshold run
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    set_check( 'c3', 2 );
+    my $ret = new_sneck( check_line('c1')
+            . check_line('c2')
+            . check_line('c3')
+            . '@r1|checks=c1,c2,c3 threshold=2 max_retries=5|'
+            . $perl . ' '
+            . $sneck_env_script
+            . "\n" )->run;
+    is(
+        $ret->{data}{restarts}{r1}{output},
+        join( "\n",
+            'SNECK_RESTART=r1',      'SNECK_REASON=threshold',
+            'SNECK_CASCADE_FROM=',   'SNECK_FAILED_CHECKS=c1,c3',
+            'SNECK_CHECKS=c1,c2,c3', 'SNECK_THRESHOLD=2',
+            'SNECK_ATTEMPTS=1' ),
+        'SNECK_* variables for a threshold run'
+    );
+    ok( !exists( $ENV{SNECK_RESTART} ), 'SNECK_* variables do not leak into the caller' );
+}
+
+#
+# SNECK_* variables for a cascade run
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    my $ret = new_sneck( check_line('c1')
+            . check_line('c2')
+            . restart_line( 'r_db', 'checks=c1' )
+            . '@r_app|checks=c2 depends=r_db cascade=1|'
+            . $perl . ' '
+            . $sneck_env_script
+            . "\n" )->run;
+    is( $ret->{data}{restarts}{r_app}{reason}, 'cascade from r_db', 'cascade ran' );
+    is(
+        $ret->{data}{restarts}{r_app}{output},
+        join( "\n",
+            'SNECK_RESTART=r_app',      'SNECK_REASON=cascade',
+            'SNECK_CASCADE_FROM=r_db',  'SNECK_FAILED_CHECKS=',
+            'SNECK_CHECKS=c2',          'SNECK_THRESHOLD=1',
+            'SNECK_ATTEMPTS=0' ),
+        'SNECK_* variables for a cascade run'
+    );
+}
+
+#
+# check_restart off by default, so checks are not rerun
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    my $ret = new_sneck( check_line('c1') . fix_line( 'r1', 'checks=c1', 0, 'c1' ) )->run;
+    is( $ret->{data}{restarts}{r1}{ran},       1, 'restart ran' );
+    is( $ret->{data}{checks}{c1}{exit},        2, 'check result not updated without check_restart' );
+    is( $ret->{data}{critical},                1, 'still counted as critical without check_restart' );
+    ok( !exists( $ret->{data}{checks}{c1}{rechecked_by} ), 'rechecked_by not set without check_restart' );
+    ok( !exists( $ret->{data}{restarts}{r1}{recheck_failed_checks} ), 'recheck_failed_checks not set without check_restart' );
+}
+
+#
+# check_restart with the restart fixing things
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    set_check( 'c2', 1 );
+    my $ret = new_sneck( check_line('c1')
+            . check_line('c2')
+            . fix_line( 'r1', 'checks=c1 check_restart=1 check_restart_delay=0', 0, 'c1' ) )->run;
+    my $r1 = $ret->{data}{restarts}{r1};
+    is( $r1->{ran}, 1, 'restart ran' );
+    ok( !exists( $r1->{error} ), 'no error when the recheck passes' );
+    is_deeply( $r1->{recheck_failed_checks}, [], 'nothing failed on recheck' );
+    is_deeply( $r1->{failed_checks}, ['c1'], 'failed_checks still what triggered it' );
+    is( $ret->{data}{checks}{c1}{exit},         0,    'check result updated by the recheck' );
+    is( $ret->{data}{checks}{c1}{rechecked_by}, 'r1', 'rechecked_by set' );
+    ok( !exists( $ret->{data}{checks}{c2}{rechecked_by} ), 'unwatched check not rerun' );
+    is( $ret->{data}{ok},          1,                'ok count uses the recheck' );
+    is( $ret->{data}{warning},     1,                'warning count unchanged' );
+    is( $ret->{data}{critical},    0,                'critical count uses the recheck' );
+    is( $ret->{data}{alert},       1,                'alert still set by the warning' );
+    is( $ret->{data}{alertString}, "check output\n", 'alertString only has the warning' );
+}
+
+#
+# check_restart with things still failing
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    set_check( 'c2', 2 );
+    my $ret = new_sneck( check_line('c1')
+            . check_line('c2')
+            . restart_line( 'r1', 'checks=c1 check_restart=1 check_restart_delay=0' )
+            . restart_line( 'r2', 'checks=c2 depends=r1' ) )->run;
+    my $r1 = $ret->{data}{restarts}{r1};
+    is( $r1->{exit}, 0, 'command itself exited 0' );
+    is( $r1->{error}, 'checks still failing after restart: c1', 'error when still failing' );
+    is_deeply( $r1->{recheck_failed_checks}, ['c1'], 'still failing check listed' );
+    is( $ret->{data}{checks}{c1}{rechecked_by}, 'r1', 'rechecked_by set' );
+    is( $ret->{data}{critical}, 2, 'still counted as critical' );
+    is( $ret->{data}{alert},    1, 'alert set' );
+    is(
+        $ret->{data}{alertString},
+        "check output\ncheck output\n" . 'restart "r1" failed, checks still failing after restart: c1: restarted r1' . "\n",
+        'alertString has the checks then the failed restart'
+    );
+    is( $ret->{data}{restarts}{r2}{reason}, 'skipped, dependency r1 failed', 'dependent skipped' );
+    is_deeply( restarts_logged(), ['r1'], 'only r1 ran' );
+}
+
+#
+# check_restart threshold is applied to the recheck
+#
+{
+    reset_all();
+    set_check( 'a', 2 );
+    set_check( 'b', 2 );
+    my $ret = new_sneck( check_line('a')
+            . check_line('b')
+            . fix_line( 'r1', 'checks=a,b threshold=2 check_restart=1 check_restart_delay=0', 0, 'a' ) )->run;
+    my $r1 = $ret->{data}{restarts}{r1};
+    is_deeply( $r1->{recheck_failed_checks}, ['b'], 'b still failing' );
+    ok( !exists( $r1->{error} ), 'below threshold on recheck is not a failure' );
+    is( $ret->{data}{ok},       1, 'a now ok' );
+    is( $ret->{data}{critical}, 1, 'b still critical' );
+}
+
+#
+# check_restart when the command fails but the recheck passes
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    my $ret = new_sneck(
+        check_line('c1') . fix_line( 'r1', 'checks=c1 check_restart=1 check_restart_delay=0', 1, 'c1' ) )->run;
+    my $r1 = $ret->{data}{restarts}{r1};
+    is( $r1->{exit}, 1, 'command exit kept' );
+    ok( !exists( $r1->{error} ), 'no error, as exit shows it failed' );
+    is_deeply( $r1->{recheck_failed_checks}, [], 'recheck passed' );
+    is( $ret->{data}{checks}{c1}{exit}, 0, 'check result updated' );
+    is( $ret->{data}{alert}, 1, 'alert set for the failed command' );
+    is( $ret->{data}{alertString}, 'restart "r1" failed, exit 1' . "\n", 'alertString only has the restart' );
+}
+
+#
+# check_restart_delay
+#
+{
+    reset_all();
+    set_check( 'c1', 2 );
+    my $start = Time::HiRes::time;
+    my $ret
+        = new_sneck( check_line('c1') . fix_line( 'r1', 'checks=c1 check_restart=1 check_restart_delay=2', 0, 'c1' ) )
+        ->run;
+    my $took = Time::HiRes::time - $start;
+    ok( $took >= 2, 'waited check_restart_delay before rechecking' ) or diag( 'took ' . $took );
+    is( $ret->{data}{checks}{c1}{exit}, 0, 'rechecked after the delay' );
 }
 
 done_testing();

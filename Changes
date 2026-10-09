@@ -1,6 +1,6 @@
 Revision history for Monitoring-Sneck
 
-1.5.0   2026-10-08/
+1.5.0   2026-10-09/13:00
         - signal deaths now exit as 128 + signal and count as errored
         - run no longer accumulates results when called more than once
         - .snmp cache is now always gzip+base64

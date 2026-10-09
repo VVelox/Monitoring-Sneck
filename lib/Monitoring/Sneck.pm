@@ -126,7 +126,9 @@ For below '$name' is the name of the check in question.
       rerun after a restart with check_restart set. The name of that
       restart. The rest of the results are from the rerun.
 
-For below '$name' is the name of the debug checks in question.
+For below '$name' is the name of the debug checks in question. Debug
+checks are run the same as checks, including check_timeout,
+check_timeout_signal, and check_kill_sub_pids.
 
     - $hash{data}{debugs}{$name} :: A hash with info on the checks ran.
 

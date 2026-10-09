@@ -226,15 +226,15 @@ sneck, not L<Monitoring::Sneck>.
       for sneck.
       Default :: 30
 
-    - check_timeout_signal :: Signal to send a check on timeout. Works
-      the same as timeout_signal for restarts. The same as B<-s> for
-      sneck.
+    - check_timeout_signal :: Signal to send a check or debug check on
+      timeout. Works the same as timeout_signal for restarts. The same
+      as B<-s> for sneck.
       Default :: none
 
     - check_kill_sub_pids :: If 1, the timeout signal is also sent to
-      all child processes of the check. Works the same as kill_sub_pids
-      for restarts. The same as B<-k> for sneck. B<-K> disables it.
-      Takes true and false in YAML.
+      all child processes of the check or debug check. Works the same
+      as kill_sub_pids for restarts. The same as B<-k> for sneck. B<-K>
+      disables it. Takes true and false in YAML.
       Default :: 1
 
 Any other option is an error.

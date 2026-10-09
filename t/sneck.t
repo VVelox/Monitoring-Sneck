@@ -344,32 +344,11 @@ SKIP: {
 }
 
 #
-# -l with -r stops a second run while the first is still restarting things.
-# The pid file normally goes in /var/run, so a wrapper points it at a temp
-# dir before running sneck.
+# -l with -r stops a second run while the first is still restarting things,
+# using the pid dir from -P
 #
 {
     my $pid_dir = tempdir( DIR => $dir );
-    local $ENV{SNECK_TEST_PID_DIR} = $pid_dir;
-    my $wrapper = File::Spec->catfile( $dir, 'pid_dir_wrapper.pl' );
-    open( my $wrapper_fh, '>', $wrapper ) or die( 'failed to write "' . $wrapper . '"... ' . $! );
-    print $wrapper_fh <<'END';
-use Proc::PID::File ();
-my $running = \&Proc::PID::File::running;
-{
-    no warnings 'redefine';
-    *Proc::PID::File::running = sub {
-        my $class = shift;
-        return $running->( $class, dir => $ENV{SNECK_TEST_PID_DIR} );
-    };
-}
-my $script = shift(@ARGV);
-$0 = $script;
-do($script);
-die($@) if $@;
-END
-    close($wrapper_fh);
-
     my ( $fh, $restart_log ) = tempfile( DIR => $dir, SUFFIX => '.log' );
     close($fh);
     my $restart_script = File::Spec->catfile( $dir, 'slow_restart.pl' );
@@ -378,6 +357,7 @@ END
     close($restart_fh);
     my $cfg   = write_config( "crit_check|$perl -e 'exit 2'\n" . "\@r1|checks=crit_check|$perl $restart_script $restart_log\n" );
     my $cache = File::Spec->catfile( $dir, 'lock.cache' );
+    my @args  = ( '-u', '-r', '-l', '-P', $pid_dir, '-q', '-f', $cfg, '-C', $cache );
     my ( $first_stderr_fh, $first_stderr ) = tempfile( DIR => $dir, SUFFIX => '.stderr' );
     close($first_stderr_fh);
 
@@ -386,8 +366,7 @@ END
     if ( !$first_pid ) {
         open( STDOUT, '>', '/dev/null' ) or POSIX::_exit(127);
         open( STDERR, '>', $first_stderr ) or POSIX::_exit(127);
-        exec( $perl, '-I' . $lib, $wrapper, $script, '-u', '-r', '-l', '-q', '-f', $cfg, '-C', $cache )
-            or POSIX::_exit(127);
+        exec( $perl, '-I' . $lib, $script, @args ) or POSIX::_exit(127);
     }
 
     my $deadline = time + 10;
@@ -395,23 +374,32 @@ END
         select( undef, undef, undef, 0.05 );
     }
 
-    my @second_command = ( $perl, '-I' . $lib, $wrapper, $script, '-u', '-r', '-l', '-q', '-f', $cfg, '-C', $cache );
-    my ( $stderr_fh, $stderr_file ) = tempfile( DIR => $dir, SUFFIX => '.stderr' );
-    close($stderr_fh);
-    open( my $saved_stderr, '>&', \*STDERR ) or die( 'failed to save stderr... ' . $! );
-    open( STDERR, '>', $stderr_file ) or die( 'failed to redirect stderr... ' . $! );
-    system(@second_command);
-    my $second_exit = $? >> 8;
-    open( STDERR, '>&', $saved_stderr ) or die( 'failed to restore stderr... ' . $! );
+    my $pid_file = File::Spec->catfile( $pid_dir, 'sneck.pid' );
+    ok( -f $pid_file, '-l pid file is in the -P dir' );
+    my ( $stdout, $stderr, $second_exit ) = run_sneck_stderr(@args);
 
     waitpid( $first_pid, 0 );
     my $first_exit = $? >> 8;
 
     isnt( $second_exit, 0, '-l second run exits non-zero while the first is running' );
-    like( slurp($stderr_file), qr/^Already running as $first_pid /, '-l second run says who is running' );
+    like( $stderr, qr/^Already running as $first_pid /, '-l second run says who is running' );
     is( $first_exit, 0, '-l first run exits 0' );
     is( slurp($first_stderr), '', '-r with -l does not warn' );
     is( slurp($restart_log), "r1\n", '-l only the first run restarted' );
+    ok( !-e $pid_file, '-l pid file removed once done' );
+}
+
+#
+# -l with a -P dir that does not exist fails without running anything
+#
+{
+    my $cfg = write_config($ok_check);
+    my ( $stdout, $stderr, $exit_code )
+        = run_sneck_stderr( '-u', '-l', '-P', File::Spec->catfile( $dir, 'no', 'such', 'dir' ), '-f', $cfg, '-C',
+        File::Spec->catfile( $dir, 'bad_pid_dir.cache' ) );
+    isnt( $exit_code, 0, '-l with a missing -P dir exits non-zero' );
+    like( $stderr, qr/^-l specified and PID file check failed/, '-l with a missing -P dir says why' );
+    is( $stdout, '', '-l with a missing -P dir prints nothing' );
 }
 
 #

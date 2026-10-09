@@ -6,7 +6,7 @@ sneck - a boopable LibreNMS JSON style SNMP extend for remotely running nagios s
 
 =head1 SYNOPSIS
 
-sneck -u [B<-C> <cache file] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>] [B<-r>]
+sneck -u [B<-C> <cache file] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>] [B<-P> <pid dir>] [B<-r>]
 
 sneck -c [B<-C> <cache file] [B<-b>]
 
@@ -75,6 +75,15 @@ Don't print the results for -u. Exit queitly.
 
 Enable locking for with -u so more than one instance can't run at a time.
 
+The PID file is sneck.pid in the directory set by B<-P>.
+
+=head2 -P <pid dir>
+
+The directory for the PID file used by B<-l>. The user running sneck
+must be able to write to it.
+
+Default :: /var/run
+
 =head2 -r
 
 Run any restarts whose checks failed. Without this, restarts are only
@@ -133,6 +142,7 @@ my $compress;
 my $debug;
 my $quiet;
 my $locking;
+my $pid_dir = '/var/run';
 my $test_config;
 my $restart;
 Getopt::Long::Configure('no_ignore_case');
@@ -152,6 +162,7 @@ GetOptions(
 	'd'       => \$debug,
 	'q'       => \$quiet,
 	'l'       => \$locking,
+	'P=s'     => \$pid_dir,
 	't'       => \$test_config,
 	'r'       => \$restart,
 );
@@ -225,7 +236,7 @@ my $sneck = Monitoring::Sneck->new(
 # -l if asked for
 if ($locking) {
 	my $alive;
-	eval { $alive = Proc::PID::File->running(); };
+	eval { $alive = Proc::PID::File->running( dir => $pid_dir, name => 'sneck' ); };
 	if ($@) {
 		die( '-l specified and PID file check failed... ' . $@ );
 		exit 255;

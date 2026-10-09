@@ -290,6 +290,7 @@ sub warning_list {
                 kill_sub_pids       => 1,
                 check_restart       => 0,
                 check_restart_delay => 5,
+                not_every           => undef,
             },
             full => {
                 command             => '/usr/sbin/service bar restart',
@@ -306,6 +307,7 @@ sub warning_list {
                 kill_sub_pids       => 0,
                 check_restart       => 1,
                 check_restart_delay => 0,
+                not_every           => undef,
             },
             tabbed => {
                 command             => '/bin/true',
@@ -322,6 +324,7 @@ sub warning_list {
                 kill_sub_pids       => 1,
                 check_restart       => 0,
                 check_restart_delay => 5,
+                not_every           => undef,
             },
         },
         'restarts parsed with defaults filled in, later | kept in command'
@@ -505,6 +508,86 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', '' ) {
         'space after comma reported'
     );
     is_deeply( $config->restarts, {}, 'restart with space after comma not kept' );
+}
+
+#
+# quoted option values
+#
+{
+    my $config = parse_raw( "a|/bin/true\nb|/bin/true\n"
+            . "\@double|checks=a not_every=\"* 0-3 * * *\"|/bin/true\n"
+            . "\@single|checks=a not_every='*/15  2 * * 6,0'\ttimeout=5|/bin/true\n"
+            . "\@partial|checks=a not_every=*\" 0-3 \"'* * *'|/bin/true\n"
+            . "\@quoted_list|checks=\"a,b\" timeout='60'|/bin/true\n" );
+    ok( $config->is_valid, 'quoted options valid' ) or diag( explain( error_list($config) ) );
+    my $restarts = $config->restarts;
+    is( $restarts->{double}{not_every},  '* 0-3 * * *',     'double quoted value' );
+    is( $restarts->{single}{not_every},  '*/15 2 * * 6,0',  'single quoted value, whitespace collapsed' );
+    is( $restarts->{single}{timeout},    5,                 'option after a quoted value still read' );
+    is( $restarts->{partial}{not_every}, '* 0-3 * * *',     'quoted parts joined to the rest of the value' );
+    is_deeply( $restarts->{quoted_list}{checks}, [ 'a', 'b' ], 'quoted list' );
+    is( $restarts->{quoted_list}{timeout}, 60, 'quoted number' );
+}
+
+#
+# quoting errors
+#
+{
+    my $config = parse_raw( "a|/bin/true\n"
+            . "\@unterminated|checks=a not_every=\"* 0-3 * * *|/bin/true\n"
+            . "\@spaced_list|checks=\"a, a\"|/bin/true\n"
+            . "\@quoted_key|\"checks=a\" \"time out\"=1|/bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            '2: restart "unterminated" has a unterminated quote in ""* 0-3 * * *"',
+            '2: restart "unterminated" option "not_every" is not a valid cron spec, At least five cron entry fields required',
+            '3: restart "spaced_list" option "checks" has the invalid name " a"',
+            '4: restart "quoted_key" option ""checks=a"" is not in the form key=value',
+            '4: restart "quoted_key" option ""time out"=1" is not in the form key=value',
+            '4: restart "quoted_key" has no checks',
+        ],
+        'quoting errors reported'
+    );
+    is_deeply( $config->restarts, {}, 'restarts with quoting errors left out' );
+}
+
+#
+# not_every
+#
+{
+    my $config = parse_raw( "a|/bin/true\n"
+            . "\@sundays|checks=a not_every=\"* 2-3 * * 0\"|/bin/true\n"
+            . "\@sunday_seven|checks=a not_every=\"* 2-3 * * 7\"|/bin/true\n"
+            . "\@both_days|checks=a not_every=\"0 0 1 1-3 1-5\"|/bin/true\n" );
+    ok( $config->is_valid, 'not_every specs valid' ) or diag( explain( error_list($config) ) );
+    is( $config->restarts->{both_days}{not_every}, '0 0 1 1-3 1-5', 'not_every kept' );
+
+    $config = parse_raw( "a|/bin/true\n"
+            . "\@range|checks=a not_every=\"* 0-30 * * *\"|/bin/true\n"
+            . "\@four|checks=a not_every=\"* * * *\"|/bin/true\n"
+            . "\@six|checks=a not_every=\"* 0-3 * * * extra\"|/bin/true\n"
+            . "\@names|checks=a not_every=\"* * * * sat\"|/bin/true\n"
+            . "\@impossible|checks=a not_every=\"* * 31 2 *\"|/bin/true\n"
+            . "\@macro|checks=a not_every=\@daily|/bin/true\n"
+            . "\@empty|checks=a not_every=|/bin/true\n"
+            . "\@twice|checks=a not_every=\"* * * * *\" not_every=\"* * * * *\"|/bin/true\n" );
+    ok( !$config->is_valid, 'bad not_every makes config invalid' );
+    is_deeply(
+        error_list($config),
+        [
+            '2: restart "range" option "not_every" is not a valid cron spec, Field value (30) out of range (0-23)',
+            '3: restart "four" option "not_every" is not a valid cron spec, At least five cron entry fields required',
+            '4: restart "six" option "not_every" is not a valid cron spec, it must have exactly five fields',
+            '5: restart "names" option "not_every" is not a valid cron spec, Malformed cron field \'sat\'',
+            '6: restart "impossible" option "not_every" is not a valid cron spec, Impossible last day for provided months',
+            '7: restart "macro" option "not_every" is not a valid cron spec, At least five cron entry fields required',
+            '8: restart "empty" option "not_every" is not a valid cron spec, At least five cron entry fields required',
+            '9: restart "twice" option "not_every" is given more than once',
+        ],
+        'every bad not_every reported'
+    );
+    is_deeply( $config->restarts, {}, 'restarts with a bad not_every left out' );
 }
 
 #

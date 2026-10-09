@@ -143,7 +143,7 @@ in the config has a entry, even when restarts are disabled.
     - $hash{data}{restarts}{$name}{reason} :: Why it did or did not run.
       One of 'threshold', 'cascade from $depend', 'cooldown, $N seconds
       left', 'max retries reached', 'skipped, dependency $depend failed',
-      'not triggered', or 'restarts disabled'.
+      'maintenance window', 'not triggered', or 'restarts disabled'.
 
     - $hash{data}{restarts}{$name}{failed_checks} :: Array of the watched
       checks that counted as failed.
@@ -573,9 +573,11 @@ sub _tally_checks {
 # Restarts run in dependency order. A restart runs if its threshold was
 # met, or if cascade is set and one of its depends ran without failing.
 # Before running, it is skipped if a depend failed or was itself skipped
-# for that reason, and held back by min_interval and, for threshold
-# triggered runs, max_retries. State for those two is kept in the state
-# file. It is written before each restart runs, so a run that is killed
+# for that reason, and held back by not_every, min_interval and, for
+# threshold triggered runs, max_retries. One held back by not_every gets no
+# status, so restarts depending on it act as if it did not trigger, and its
+# state is left alone. State for min_interval and max_retries is kept in
+# the state file. It is written before each restart runs, so a run that is killed
 # part way through still counts, and again once all are done. last_run is
 # set to when each restart finished.
 #
@@ -663,6 +665,8 @@ sub _handle_restarts {
 			if ( defined($failed_depend) ) {
 				$result->{reason} = 'skipped, dependency ' . $failed_depend . ' failed';
 				$status{$name} = 'skipped';
+			} elsif ( defined( $restart->{not_every} ) && $self->_in_not_every( $restart->{not_every}, $now ) ) {
+				$result->{reason} = 'maintenance window';
 			} elsif ( $restart->{min_interval} > 0
 				&& $since_last >= 0
 				&& $since_last < $restart->{min_interval} )
@@ -706,6 +710,48 @@ sub _handle_restarts {
 
 	return;
 } ## end sub _handle_restarts
+
+# Checks if a time falls in a not_every maintenance window. Used by
+# _handle_restarts. The time is turned into local time via localtime, so
+# TZ is honored, and matched to the minute. DateTime::Event::Cron is only
+# loaded the first time this is called.
+#
+# Args...
+#
+#     - spec :: A five field cron spec, as already validated by
+#       Monitoring::Sneck::Config.
+#
+#     - epoch :: Unix time to check.
+#
+# Returns 1 if the time matches the spec, otherwise 0.
+#
+# Example...
+#
+#     # 2026-10-11 02:30 local time, a Sunday
+#     $self->_in_not_every( '* 2-3 * * 0', $epoch );
+#     # returns 1
+#
+#     $self->_in_not_every( '* 4 * * *', $epoch );
+#     # returns 0
+sub _in_not_every {
+	my ( $self, $spec, $epoch ) = @_;
+
+	require DateTime;
+	require DateTime::Event::Cron;
+
+	# floating, so it is matched as is and DateTime never has to work out the local time zone itself
+	my @local_time = localtime($epoch);
+	my $local_time = DateTime->new(
+		year      => $local_time[5] + 1900,
+		month     => $local_time[4] + 1,
+		day       => $local_time[3],
+		hour      => $local_time[2],
+		minute    => $local_time[1],
+		time_zone => 'floating',
+	);
+
+	return DateTime::Event::Cron->new_from_cron( cron => $spec )->match($local_time) ? 1 : 0;
+} ## end sub _in_not_every
 
 # Runs a single restart and records the results. Used by _handle_restarts.
 # The command gets the SNECK_* environment variables described under

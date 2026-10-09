@@ -536,6 +536,112 @@ sub run_and_kill_during_restart {
 }
 
 #
+# not_every matching, with a fixed time and time zone
+#
+{
+    my $old_tz = $ENV{TZ};
+    $ENV{TZ} = 'UTC';
+    POSIX::tzset();
+    my $sneck = new_sneck( check_line('c1') );
+
+    # Sun Oct 11 02:30:00 2026 UTC
+    my $epoch = 1791685800;
+    is( $sneck->_in_not_every( '* 2-3 * * 0',  $epoch ), 1, 'matches hour and day of week' );
+    is( $sneck->_in_not_every( '* 2-3 * * 7',  $epoch ), 1, 'Sunday as 7' );
+    is( $sneck->_in_not_every( '30 2 11 10 *', $epoch ), 1, 'matches minute, hour, day, and month' );
+    is( $sneck->_in_not_every( '31 2 * * *',   $epoch ), 0, 'other minute does not match' );
+    is( $sneck->_in_not_every( '* 4 * * *',    $epoch ), 0, 'other hour does not match' );
+    is( $sneck->_in_not_every( '* * * * 1-5',  $epoch ), 0, 'weekdays do not match a Sunday' );
+    is( $sneck->_in_not_every( '* * 1 * 0',    $epoch ), 1, 'day of month or day of week, like cron' );
+    is( $sneck->_in_not_every( '* * 11 * 1',   $epoch ), 1, 'day of month or day of week, other way around' );
+    is( $sneck->_in_not_every( '* * 1 * 1',    $epoch ), 0, 'neither day matching does not match' );
+
+    # five hours behind UTC, making it Sat Oct 10 21:30
+    $ENV{TZ} = 'EST5';
+    POSIX::tzset();
+    is( $sneck->_in_not_every( '* 21 * * 6', $epoch ), 1, 'TZ honored' );
+    is( $sneck->_in_not_every( '* 2-3 * * 0', $epoch ), 0, 'UTC time not used' );
+
+    if ( defined($old_tz) ) {
+        $ENV{TZ} = $old_tz;
+    } else {
+        delete( $ENV{TZ} );
+    }
+    POSIX::tzset();
+}
+
+#
+# not_every holding back restarts
+#
+{
+    # a month that is not this one, so the window never matches
+    my $other_month = ( localtime(time) )[4] + 2;
+    $other_month = 1 if $other_month > 12;
+
+    reset_all();
+    set_check( 'c1', 2 );
+    my $sneck = new_sneck( check_line('c1') . restart_line( 'r1', 'checks=c1 max_retries=1 not_every="* * * * *"' ) );
+    my $ret   = $sneck->run;
+    is( $ret->{data}{restarts}{r1}{triggered}, 1,                    'triggered in maintenance window' );
+    is( $ret->{data}{restarts}{r1}{ran},       0,                    'not ran in maintenance window' );
+    is( $ret->{data}{restarts}{r1}{reason},    'maintenance window', 'maintenance window reason' );
+    is( $ret->{data}{restarts}{r1}{attempts},  0,                    'attempts not counted in maintenance window' );
+    unlike( $ret->{data}{alertString}, qr/restart/, 'maintenance window is not a restart alert' );
+    is_deeply( restarts_logged(), [], 'nothing restarted in maintenance window' );
+
+    # same state file, with a window that never matches
+    $sneck = new_sneck(
+        check_line('c1') . restart_line( 'r1', 'checks=c1 max_retries=1 not_every="* * * ' . $other_month . ' *"' ) );
+    $ret = $sneck->run;
+    is( $ret->{data}{restarts}{r1}{ran},      1,           'runs outside maintenance window' );
+    is( $ret->{data}{restarts}{r1}{reason},   'threshold', 'threshold reason outside maintenance window' );
+    is( $ret->{data}{restarts}{r1}{attempts}, 1,           'first attempt, none used up by the window' );
+    is_deeply( restarts_logged(), ['r1'], 'restarted outside maintenance window' );
+}
+
+#
+# not_every and depends
+#
+{
+    reset_all();
+    set_check( 'app_check', 2 );
+    set_check( 'db_check',  2 );
+    my $config
+        = check_line('app_check')
+        . check_line('db_check')
+        . restart_line( 'a_app', 'checks=app_check depends=z_db min_interval=0' )
+        . restart_line( 'z_db',  'checks=db_check min_interval=0 not_every="* * * * *"' );
+    my $ret = new_sneck($config)->run;
+    is( $ret->{data}{restarts}{z_db}{reason},  'maintenance window', 'depend held back by maintenance window' );
+    is( $ret->{data}{restarts}{a_app}{reason}, 'threshold',          'dependent still runs for its own threshold' );
+    is_deeply( restarts_logged(), ['a_app'], 'only the dependent restarted' );
+
+    reset_all();
+    set_check( 'db_check', 2 );
+    $config
+        = check_line('app_check')
+        . check_line('db_check')
+        . restart_line( 'a_app', 'checks=app_check depends=z_db cascade=1 min_interval=0' )
+        . restart_line( 'z_db',  'checks=db_check min_interval=0 not_every="* * * * *"' );
+    $ret = new_sneck($config)->run;
+    is( $ret->{data}{restarts}{a_app}{ran},    0,               'no cascade from a depend in maintenance window' );
+    is( $ret->{data}{restarts}{a_app}{reason}, 'not triggered', 'not triggered reason without cascade' );
+    is_deeply( restarts_logged(), [], 'nothing restarted' );
+
+    # a failed depend is reported over the maintenance window
+    reset_all();
+    set_check( 'app_check', 2 );
+    set_check( 'db_check',  2 );
+    $config
+        = check_line('app_check')
+        . check_line('db_check')
+        . restart_line( 'a_app', 'checks=app_check depends=z_db min_interval=0 not_every="* * * * *"' )
+        . restart_line( 'z_db', 'checks=db_check min_interval=0', 1 );
+    $ret = new_sneck($config)->run;
+    is( $ret->{data}{restarts}{a_app}{reason}, 'skipped, dependency z_db failed', 'failed depend wins over maintenance window' );
+}
+
+#
 # state file problems
 #
 {

@@ -90,8 +90,9 @@ Lines matching /^\@[A-Za-z0-9\_]+\|[^\|]*\|/ are restarts. The name is
 between the @ and the first |, the options are between the first and
 second |, and the command is everything after the second |, with
 leading whitespace removed. Options are separated by spaces or tabs and
-are in the form key=value. The checks and depends options are comma
-separated lists. See RESTARTS.
+are in the form key=value. Values containing spaces or tabs may be
+quoted with " or ', such as not_every="* 0-3 * * *". The checks and
+depends options are comma separated lists. See RESTARTS.
 
 Any other sort of line is an error.
 
@@ -271,6 +272,17 @@ Options are as below.
       before rerunning its checks. Does nothing without check_restart.
       Default :: 5
 
+    - not_every :: A maintenance window, as a five field cron spec of
+      minute, hour, day of month, month, and day of week. While the
+      local time matches it, this restart does not run. Only numbers
+      are allowed, no names such as sat or jan. Sunday is 0 or 7. As
+      with cron, if both day of month and day of week are given, either
+      one matching is enough. Restarts depending on one held back by
+      this treat it as if it did not trigger. In the sneck format it
+      must be quoted. In YAML it must be quoted if it starts with *.
+      Needs L<DateTime::Event::Cron>.
+      Default :: none
+
 Critical always counts as failed. Ok and warning never do.
 
 The 0/1 options also take true and false in YAML.
@@ -318,6 +330,16 @@ why it is running.
         timeout: 60
         timeout_signal: TERM
         check_restart: true
+
+    @php_fpm|checks=php_check not_every="* 2-3 * * 0"|/usr/sbin/service php_fpm restart
+
+    restarts:
+      php_fpm:
+        command: /usr/sbin/service php_fpm restart
+        checks: [php_check]
+        not_every: '* 2-3 * * 0'
+
+The last two never restart between 02:00 and 03:59 on Sundays.
 
 =head1 METHODS
 
@@ -591,6 +613,10 @@ This is a copy, so changing it does not change the config.
     - timeout_signal :: The signal name without the SIG prefix, such as
       TERM, or undef if not set. Numbers are turned into names.
 
+    - not_every :: The cron spec with surrounding whitespace removed and
+      other runs of whitespace turned into a single space, or undef if
+      not set.
+
     my $threshold = $config->restarts->{httpd}{threshold};
 
 =cut
@@ -697,10 +723,13 @@ sub _parse_sneck {
 			# options are space separated key=value, with checks and depends being comma separated lists
 			my %options;
 			my $options_good = 1;
-			foreach my $option ( split( /[\ \t]+/, $options_string ) ) {
-				if ( $option eq '' ) {
-					next;
-				}
+			my ( $option_strings, $unterminated ) = $self->_split_options($options_string);
+			if ( defined($unterminated) ) {
+				$self->_add_problem( 'errors', $location,
+					'restart "' . $name . '" has a unterminated quote in "' . $unterminated . '"' );
+				$options_good = 0;
+			}
+			foreach my $option ( @{$option_strings} ) {
 				if ( $option !~ /^([A-Za-z\_]+)\=(.*)$/ ) {
 					$self->_add_problem( 'errors', $location,
 						'restart "' . $name . '" option "' . $option . '" is not in the form key=value' );
@@ -708,6 +737,7 @@ sub _parse_sneck {
 					next;
 				}
 				my ( $key, $value ) = ( $1, $2 );
+				$value =~ s/\"([^\"]*)\"|\'([^\']*)\'/defined($1) ? $1 : $2/ge;
 				if ( exists( $options{$key} ) ) {
 					$self->_add_problem( 'errors', $location,
 						'restart "' . $name . '" option "' . $key . '" is given more than once' );
@@ -718,7 +748,7 @@ sub _parse_sneck {
 					$value = [ split( /,/, $value, -1 ) ];
 				}
 				$options{$key} = $value;
-			} ## end foreach my $option ( split( /[\ \t]+/, $options_string ) )
+			} ## end foreach my $option ( @{$option_strings} )
 			# added even with bad options, so what it references is still checked
 			$self->_add_restart( $name, $command, \%options, $location );
 			if ( !$options_good ) {
@@ -739,6 +769,43 @@ sub _parse_sneck {
 
 	return;
 } ## end sub _parse_sneck
+
+# Splits the options part of a sneck format restart line into its
+# individual options. Used by _parse_sneck. Options are separated by spaces
+# or tabs, except inside " or ' quotes, which are left in place for the
+# caller to remove from the value.
+#
+# Args...
+#
+#     - options_string :: The text between the first and second | of a
+#       restart line.
+#
+# Returns a array ref of the option strings, quotes included, followed by
+# undef, or by the unparsed rest of the string starting at the first
+# quote that was never closed.
+#
+# Example...
+#
+#     my ( $options, $unterminated ) = $self->_split_options(' checks=a not_every="* 0-3 * * *"');
+#     # $options is [ 'checks=a', 'not_every="* 0-3 * * *"' ] and $unterminated is undef
+#
+#     ( $options, $unterminated ) = $self->_split_options('checks=a not_every="* 0-3');
+#     # $options is [ 'checks=a', 'not_every=' ] and $unterminated is '"* 0-3'
+sub _split_options {
+	my ( $self, $options_string ) = @_;
+
+	my @options;
+	while ( $options_string =~ /\G[\ \t]*((?:[^\ \t\"\']+|\"[^\"]*\"|\'[^\']*\')+)/gc ) {
+		push( @options, $1 );
+	}
+
+	# anything left besides whitespace starts with a unclosed quote
+	if ( $options_string =~ /\G[\ \t]*([^\ \t].*)$/gc ) {
+		return ( \@options, $1 );
+	}
+
+	return ( \@options, undef );
+} ## end sub _split_options
 
 # Parses $self->{raw} as YAML, filling in vars, env, checks, debugs,
 # errors, and warnings. Called once by new after YAML::XS has been loaded.
@@ -937,7 +1004,7 @@ sub _add_command {
 #     # { command => '/usr/sbin/service apache24 restart', checks => [ 'http_check', 'php_check' ],
 #     #   depends => [], threshold => 2, cascade => 0, ignore_unknown => 1, ignore_errored => 1,
 #     #   min_interval => 180, max_retries => 0, timeout => 30, timeout_signal => undef,
-#     #   kill_sub_pids => 1, check_restart => 0, check_restart_delay => 5 }
+#     #   kill_sub_pids => 1, check_restart => 0, check_restart_delay => 5, not_every => undef }
 sub _add_restart {
 	my ( $self, $name, $command, $options, $location ) = @_;
 
@@ -1003,6 +1070,15 @@ sub _add_restart {
 		} else {
 			$self->_add_problem( 'errors', $location,
 				$label . ' option "timeout_signal" must be a signal name or a signal number other than 0' );
+		}
+	}
+
+	if ( exists( $options->{not_every} ) ) {
+		my ( $spec, $error ) = $self->_parse_cron( $options->{not_every} );
+		if ( defined($error) ) {
+			$self->_add_problem( 'errors', $location, $label . ' option "not_every" ' . $error );
+		} else {
+			$restart{not_every} = $spec;
 		}
 	}
 
@@ -1079,8 +1155,63 @@ sub _restart_defaults {
 		kill_sub_pids       => 1,
 		check_restart       => 0,
 		check_restart_delay => 5,
+		not_every           => undef,
 	};
 } ## end sub _restart_defaults
+
+# Validates a cron spec, as used by not_every, and puts it in a standard
+# form. Used by _add_restart. DateTime::Event::Cron is only loaded the
+# first time this is called.
+#
+# Args...
+#
+#     - spec :: The cron spec from the config. May be undef or, in error,
+#       a reference for YAML.
+#
+# Returns two values. The first is the spec with surrounding whitespace
+# removed and other runs of whitespace turned into a single space, or
+# undef if it is not valid. The second is undef if it is valid, or the
+# end of a error message saying why it is not, to be put after the
+# option name.
+#
+# Example...
+#
+#     my ( $spec, $error ) = $self->_parse_cron(' *  0-3 * * * ');
+#     # $spec is '* 0-3 * * *' and $error is undef
+#
+#     ( $spec, $error ) = $self->_parse_cron('* 0-30 * * *');
+#     # $spec is undef and $error is 'is not a valid cron spec, Field value (30) out of range (0-23)'
+sub _parse_cron {
+	my ( $self, $spec ) = @_;
+
+	if ( !defined($spec) || ref($spec) ) {
+		return ( undef, 'must be a string' );
+	}
+
+	$spec =~ s/^\s+|\s+$//g;
+	$spec =~ s/\s+/ /g;
+
+	if ( !eval { require DateTime::Event::Cron; 1 } ) {
+		return ( undef, 'needs DateTime::Event::Cron, which could not be loaded' );
+	}
+
+	my $cron = eval { DateTime::Event::Cron->new_from_cron( cron => $spec ) };
+	if ( !defined($cron) ) {
+		my $cron_error = $@;
+		$cron_error =~ s/\s+at\s+\S+\s+line\s+\d+\.?\s*$//;
+		$cron_error =~ s/\s+/ /g;
+		$cron_error =~ s/^\s+|\s+$//g;
+		$cron_error =~ s/\.$//;
+		return ( undef, 'is not a valid cron spec, ' . $cron_error );
+	}
+
+	# anything past the fifth field is taken as a crontab command
+	if ( defined( $cron->command ) && $cron->command ne '' ) {
+		return ( undef, 'is not a valid cron spec, it must have exactly five fields' );
+	}
+
+	return ( $spec, undef );
+} ## end sub _parse_cron
 
 # Turns a signal given in a config into its name, as used by kill and
 # pkill. Known signals come from $Config{sig_name} and $Config{sig_num}, so

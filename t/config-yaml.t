@@ -334,6 +334,7 @@ if ( !$have_yaml ) {
             kill_sub_pids       => 1,
             check_restart       => 0,
             check_restart_delay => 5,
+            not_every           => undef,
         },
         'YAML restart defaults'
     );
@@ -354,6 +355,7 @@ if ( !$have_yaml ) {
             kill_sub_pids       => 0,
             check_restart       => 1,
             check_restart_delay => 0,
+            not_every           => undef,
         },
         'YAML restart options, true and false work for 0/1 options'
     );
@@ -570,6 +572,48 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', "''" ) {
         'errorString uses YAML paths'
     );
     ok( !exists $ENV{SNECK_YAML_BAD_ENV}, 'YAML env not applied when invalid' );
+}
+
+#
+# not_every
+#
+{
+    my $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "restarts:\n"
+            . "  quoted:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    not_every: '* 2-3  * * 0'\n"
+            . "  unquoted:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    not_every: 0 2 * * *\n"
+            . "  bad_spec:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    not_every: '* 0-30 * * *'\n"
+            . "  list:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    not_every: ['* * * * *']\n"
+            . "  no_value:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    not_every: ~\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'restarts.bad_spec: restart "bad_spec" option "not_every" is not a valid cron spec, Field value (30) out of range (0-23)',
+            'restarts.list: restart "list" option "not_every" must be a string',
+            'restarts.no_value: restart "no_value" option "not_every" must be a string',
+        ],
+        'YAML not_every errors'
+    );
+    my $restarts = $config->restarts;
+    is( $restarts->{quoted}{not_every},   '* 2-3 * * 0', 'YAML quoted not_every' );
+    is( $restarts->{unquoted}{not_every}, '0 2 * * *',   'YAML unquoted not_every' );
+    is_deeply( [ sort keys %{$restarts} ], [ 'quoted', 'unquoted' ], 'YAML restarts with a bad not_every left out' );
 }
 
 done_testing();

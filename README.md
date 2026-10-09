@@ -116,7 +116,7 @@ Lines starting with # are comments and are ignored.
 
 - `@name|options|command` :: A restart. Options are space separated
   `key=value`, with `checks` and `depends` being comma separated lists.
-  See RESTARTS.
+  Values containing spaces may be quoted with `"` or `'`. See RESTARTS.
 
 Names are made up of `A-Z`, `a-z`, `0-9`, and `_`.
 
@@ -278,6 +278,14 @@ restarts:
   does when the reader goes away. A timeout counts as failed, with an
   exit of -1. Default :: 30
 
+- `not_every` :: A maintenance window, as a five field cron spec. While
+  local time matches it, the restart doesn't run. Numbers only, no names
+  like `sat` or `jan`. Sunday is 0 or 7. If both day of month and day of
+  week are given, either matching is enough, same as cron. Restarts
+  depending on one held back by this act as if it didn't trigger. Must
+  be quoted, such as `not_every="* 2-3 * * 0"`, or in YAML
+  `not_every: '* 2-3 * * 0'`. Default :: none
+
 Critical always counts as failed. Ok and warning never do.
 
 A restart that ran and failed sets `.data.alert` and adds a line to
@@ -380,7 +388,7 @@ an entry, even when restarts are disabled.
 - .data.restarts.$name.reason :: Why it did or didn't run. One of
   `threshold`, `cascade from $depend`, `cooldown, $N seconds left`,
   `max retries reached`, `skipped, dependency $depend failed`,
-  `not triggered`, or `restarts disabled`.
+  `maintenance window`, `not triggered`, or `restarts disabled`.
 
 - .data.restarts.$name.failed_checks :: The watched checks that failed.
 
@@ -408,14 +416,14 @@ an entry, even when restarts are disabled.
 ### FreeBSD
 
 ```
-pkg install p5-JSON p5-JSON-XS p5-File-Slurp p5-Proc-PID-File p5-App-cpanminus
+pkg install p5-JSON p5-JSON-XS p5-File-Slurp p5-Proc-PID-File p5-DateTime-Event-Cron p5-App-cpanminus
 cpanminus Monitoring::Sneck
 ```
 
 ### Debian
 
 ```
-apt-get install libjson-perl libjson-xs-perl libfile-slurp-perl libproc-pid-file-perl cpanminus
+apt-get install libjson-perl libjson-xs-perl libfile-slurp-perl libproc-pid-file-perl libdatetime-event-cron-perl cpanminus
 cpanminus Monitoring::Sneck
 ```
 

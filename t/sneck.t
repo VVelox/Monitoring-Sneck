@@ -9,6 +9,7 @@ use JSON       qw(decode_json);
 use MIME::Base64           qw(decode_base64);
 use IO::Uncompress::Gunzip qw(gunzip);
 use POSIX                  ();
+use Time::HiRes            ();
 
 if ( $^O eq 'MSWin32' ) {
     plan skip_all => 'list form pipe open not supported on Windows';
@@ -525,6 +526,79 @@ SKIP: {
     isnt( $exit_code, 0, '-l with -L exits non-zero' );
     is( $stderr, "-l and -L can not be used together\n", '-l with -L says why' );
     is( $stdout, '', '-l with -L prints nothing' );
+}
+
+#
+# check timeout settings from the config, with -T, -s, -k, and -K overriding them
+#
+{
+    # tree.pl starts a child. Each sleeps 3 seconds, then writes its own marker.
+    my $tree_script = File::Spec->catfile( $dir, 'tree.pl' );
+    open( my $tree_fh, '>', $tree_script ) or die( 'failed to write "' . $tree_script . '"... ' . $! );
+    print $tree_fh 'my ( $parent_marker, $child_marker ) = @ARGV;' . "\n"
+        . 'my $marker = fork() ? $parent_marker : $child_marker;' . "\n"
+        . 'sleep 3;' . "\n"
+        . 'open( my $fh, \'>\', $marker );' . "\n";
+    close($tree_fh);
+
+    # Runs tree.pl as a check with the given config options and sneck args.
+    # Returns the check's result and the paths of its parent and child markers.
+    my $run_tree = sub {
+        my ( $name, $options, @args ) = @_;
+        # the name may hold spaces, which would split the check args
+        ( my $marker_name = $name ) =~ s/[^A-Za-z0-9]+/_/g;
+        my @markers = map { File::Spec->catfile( $dir, 'tree.' . $marker_name . '.' . $_ ) } ( 'parent', 'child' );
+        my $cfg     = write_config( $options . "c1|$perl $tree_script " . join( ' ', @markers ) . "\n" );
+        my $start   = Time::HiRes::time;
+        my ( $stdout, $exit_code ) = run_sneck( @args, '-f', $cfg );
+        ok( Time::HiRes::time - $start < 3, $name . ' gave up at the timeout' );
+        my $c1 = decode_json($stdout)->{data}{checks}{c1};
+        ok( $c1->{run_time} >= 1, $name . ' waited the full timeout' ) or diag( 'run_time ' . $c1->{run_time} );
+        return ( $c1, \@markers );
+    };
+    # Returns which of the markers exist.
+    my $markers_exist = sub {
+        return [ map { -e $_ ? 1 : 0 } @{ $_[0] } ];
+    };
+
+    my ( $c1, $t_markers ) = $run_tree->( '-T', "\$check_timeout=60\n", '-T', '1' );
+    is( $c1->{error}, 'timed out after 1 seconds', '-T overrides config check_timeout' );
+    is( $c1->{exit},  -1,                          '-T timeout exit is -1' );
+
+    my $no_sub_markers;
+    ( $c1, $no_sub_markers )
+        = $run_tree->( '-K', "\$check_timeout=1\n\$check_timeout_signal=TERM\n\$check_kill_sub_pids=1\n", '-K' );
+    is( $c1->{error}, 'timed out after 1 seconds, sent SIGTERM', 'config check_timeout_signal used' );
+
+    my $sub_markers;
+    ( $c1, $sub_markers ) = $run_tree->( '-s -k', "\$check_timeout=1\n\$check_kill_sub_pids=0\n", '-s', 'KILL', '-k' );
+    is( $c1->{error}, 'timed out after 1 seconds, sent SIGKILL', '-s sends the signal' );
+
+    my $none_markers;
+    ( $c1, $none_markers ) = $run_tree->( '-s none', "\$check_timeout=1\n\$check_timeout_signal=TERM\n", '-s', 'none' );
+    is( $c1->{error}, 'timed out after 1 seconds', '-s none overrides config check_timeout_signal' );
+
+    sleep 4;
+    is_deeply( $markers_exist->($t_markers),      [ 1, 1 ], '-T without a signal leaves the check running' );
+    is_deeply( $markers_exist->($no_sub_markers), [ 0, 1 ], '-K overrides config check_kill_sub_pids' );
+    is_deeply( $markers_exist->($sub_markers),    [ 0, 0 ], '-k overrides config check_kill_sub_pids=0' );
+    is_deeply( $markers_exist->($none_markers),   [ 1, 1 ], '-s none sends nothing' );
+
+    my $cfg = write_config($ok_check);
+    my ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-k', '-K', '-f', $cfg );
+    isnt( $exit_code, 0, '-k with -K exits non-zero' );
+    is( $stderr, "-k and -K can not be used together\n", '-k with -K says why' );
+    is( $stdout, '', '-k with -K prints nothing' );
+
+    ( $stdout, $exit_code ) = run_sneck( '-T', '0', '-s', 'BOGUS', '-f', $cfg );
+    my $decoded = decode_json($stdout);
+    is( $decoded->{error}, 1, 'bad -T and -s set error' );
+    is(
+        $decoded->{errorString},
+        'arg check_timeout: option "check_timeout" must be a whole number of at least 1; '
+            . 'arg check_timeout_signal: option "check_timeout_signal" must be a signal name or a signal number other than 0',
+        'bad -T and -s reported'
+    );
 }
 
 #

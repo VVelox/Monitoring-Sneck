@@ -650,4 +650,60 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', "''" ) {
     is_deeply( error_list($config), ['options: must be a mapping'], 'YAML options not a mapping' );
 }
 
+#
+# check timeout options
+#
+{
+    my $config = parse_yaml( "options:\n"
+            . "  check_timeout: 60\n"
+            . "  check_timeout_signal: SIGTERM\n"
+            . "  check_kill_sub_pids: false\n" );
+    ok( $config->is_valid, 'YAML check timeout options valid' );
+    is_deeply(
+        $config->options,
+        { check_timeout => 60, check_timeout_signal => 'TERM', check_kill_sub_pids => 0 },
+        'YAML check timeout options parsed, with the signal name cleaned up'
+    );
+
+    $config = parse_yaml("options:\n  check_timeout_signal: 15\n  check_kill_sub_pids: true\n");
+    is_deeply(
+        $config->options,
+        { check_timeout_signal => 'TERM', check_kill_sub_pids => 1 },
+        'YAML check_timeout_signal number turned into a name and check_kill_sub_pids true is 1'
+    );
+
+    $config = parse_yaml( "options:\n"
+            . "  check_timeout: 1.5\n"
+            . "  check_timeout_signal: BOGUS\n"
+            . "  check_kill_sub_pids: 2\n"
+            . "checks:\n"
+            . "  a: /bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'options.check_kill_sub_pids: option "check_kill_sub_pids" must be 0 or 1',
+            'options.check_timeout: option "check_timeout" must be a whole number of at least 1',
+            'options.check_timeout_signal: option "check_timeout_signal" must be a signal name or a signal number other than 0',
+        ],
+        'YAML check timeout option errors'
+    );
+    is_deeply( $config->options, {}, 'YAML invalid check timeout options left out' );
+
+    $config = parse_yaml( "options:\n"
+            . "  check_timeout: ~\n"
+            . "  check_timeout_signal: [TERM]\n"
+            . "  check_kill_sub_pids: {a: 1}\n"
+            . "checks:\n"
+            . "  a: /bin/true\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'options.check_kill_sub_pids: option "check_kill_sub_pids" must be a string or number',
+            'options.check_timeout: option "check_timeout" must be a whole number of at least 1',
+            'options.check_timeout_signal: option "check_timeout_signal" must be a string or number',
+        ],
+        'YAML check timeout options with null and reference values'
+    );
+}
+
 done_testing();

@@ -6,11 +6,11 @@ sneck - a boopable LibreNMS JSON style SNMP extend for remotely running nagios s
 
 =head1 SYNOPSIS
 
-sneck -u [B<-C> <cache file>] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>|B<-L>] [B<-P> <pid dir>] [B<-r>]
+sneck -u [B<-C> <cache file>] [B<-f> <config file>] [B<-p>] [B<-i>] [B<-d>] [B<-q>] [B<-l>|B<-L>] [B<-P> <pid dir>] [B<-r>] [B<-T> <seconds>] [B<-s> <signal>] [B<-k>|B<-K>]
 
 sneck -c [B<-C> <cache file>] [B<-f> <config file>] [B<-b>]
 
-sneck [B<-f> <config file>] [B<-p>] [B<-i>] [B<-r>]
+sneck [B<-f> <config file>] [B<-p>] [B<-i>] [B<-r>] [B<-T> <seconds>] [B<-s> <signal>] [B<-k>|B<-K>]
 
 sneck -t [B<-f> <config file>]
 
@@ -19,8 +19,8 @@ sneck -t [B<-f> <config file>]
 For a description of the config file format and output,
 please see L<Monitoring::Sneck>.
 
-The cache file, PID dir, and locking may also be set in the config
-file. Flags override those. See OPTIONS in L<Monitoring::Sneck::Config>.
+The cache file, PID dir, locking, and check timeout settings may also
+be set in the config file. Flags override those. See OPTIONS in L<Monitoring::Sneck::Config>.
 
 =head1 FLAGS
 
@@ -112,6 +112,32 @@ same time. Without it, a warning saying so is printed to stderr.
 
 See L<Monitoring::Sneck::Config> for how restarts are configured.
 
+=head2 -T <seconds>
+
+Seconds to wait on each check before giving up on it. Overrides
+check_timeout in the config.
+
+Default :: 30
+
+=head2 -s <signal>
+
+Signal to send a check on timeout, such as TERM. Overrides
+check_timeout_signal in the config. 'none' sends no signal, even if the
+config sets one.
+
+Default :: none
+
+=head2 -k
+
+Also send the timeout signal to all child processes of a check.
+Overrides check_kill_sub_pids in the config. Does nothing without a
+timeout signal. This is the default.
+
+=head2 -K
+
+Do not send the timeout signal to child processes of a check. Overrides
+check_kill_sub_pids in the config. Can not be used with B<-k>.
+
 =head2 -t
 
 Test the config file. Prints any errors and warnings, then exits 0 if
@@ -159,6 +185,10 @@ my $no_locking;
 my $pid_dir;
 my $test_config;
 my $restart;
+my $check_timeout;
+my $check_timeout_signal;
+my $kill_sub_pids;
+my $no_kill_sub_pids;
 Getopt::Long::Configure('no_ignore_case');
 Getopt::Long::Configure('bundling');
 GetOptions(
@@ -180,6 +210,10 @@ GetOptions(
 	'P=s'     => \$pid_dir,
 	't'       => \$test_config,
 	'r'       => \$restart,
+	'T=s'     => \$check_timeout,
+	's=s'     => \$check_timeout_signal,
+	'k'       => \$kill_sub_pids,
+	'K'       => \$no_kill_sub_pids,
 );
 
 # print version or help if requested
@@ -194,6 +228,9 @@ if ($version) {
 
 if ( $locking && $no_locking ) {
 	die("-l and -L can not be used together\n");
+}
+if ( $kill_sub_pids && $no_kill_sub_pids ) {
+	die("-k and -K can not be used together\n");
 }
 
 # test the config and exit if requested
@@ -265,6 +302,9 @@ my $sneck = Monitoring::Sneck->new(
 		debug      => $debug,
 		restart    => $restart,
 		state_file => $cache_file . '.restarts',
+		check_timeout        => $check_timeout,
+		check_timeout_signal => $check_timeout_signal,
+		check_kill_sub_pids  => $kill_sub_pids ? 1 : $no_kill_sub_pids ? 0 : undef,
 	}
 );
 # -l if asked for

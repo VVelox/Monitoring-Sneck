@@ -656,6 +656,124 @@ foreach my $signal ( '0', 'ZERO', 'NOPE', '' ) {
 }
 
 #
+# check timeout options
+#
+{
+    my $config = parse_raw("\$check_timeout=60\n\$check_timeout_signal=sigterm\n\$check_kill_sub_pids=0\n");
+    ok( $config->is_valid, 'check timeout options valid' );
+    is_deeply(
+        $config->options,
+        { check_timeout => 60, check_timeout_signal => 'TERM', check_kill_sub_pids => 0 },
+        'check timeout options parsed, with the signal name cleaned up'
+    );
+
+    $config = parse_raw("\$check_timeout_signal=9\n\$check_kill_sub_pids=1\n");
+    is_deeply(
+        $config->options,
+        { check_timeout_signal => 'KILL', check_kill_sub_pids => 1 },
+        'check_timeout_signal number turned into a name'
+    );
+
+    foreach my $bad ( '0', '-1', '1.5', 'abc', '' ) {
+        $config = parse_raw( "\$check_timeout=" . $bad . "\n" );
+        is_deeply(
+            error_list($config),
+            ['1: option "check_timeout" must be a whole number of at least 1'],
+            'check_timeout "' . $bad . '" is an error'
+        );
+    }
+
+    foreach my $bad ( '0', 'BOGUS', 'SIG', '' ) {
+        $config = parse_raw( "\$check_timeout_signal=" . $bad . "\n" );
+        is_deeply(
+            error_list($config),
+            ['1: option "check_timeout_signal" must be a signal name or a signal number other than 0'],
+            'check_timeout_signal "' . $bad . '" is an error'
+        );
+    }
+
+    foreach my $bad ( '2', 'yes' ) {
+        $config = parse_raw( "\$check_kill_sub_pids=" . $bad . "\n" );
+        is_deeply(
+            error_list($config),
+            ['1: option "check_kill_sub_pids" must be 0 or 1'],
+            'check_kill_sub_pids "' . $bad . '" is an error'
+        );
+    }
+
+    $config = parse_raw( "\$check_timeout=5\n"
+            . "\$check_timeout_signal=TERM\n"
+            . "\$check_kill_sub_pids=1\n"
+            . "\$check_timeout=6\n"
+            . "\$check_timeout_signal=KILL\n"
+            . "\$check_kill_sub_pids=0\n" );
+    is_deeply(
+        error_list($config),
+        [
+            '4: option "check_timeout" is redefined',
+            '5: option "check_timeout_signal" is redefined',
+            '6: option "check_kill_sub_pids" is redefined',
+        ],
+        'check timeout options redefined'
+    );
+}
+
+#
+# validate_option
+#
+{
+    my $class = 'Monitoring::Sneck::Config';
+    is_deeply( [ $class->validate_option( 'check_timeout_signal', 'sigterm' ) ], [ 'TERM', undef ], 'class call, signal cleaned up' );
+    is_deeply( [ $class->validate_option( 'check_timeout_signal', 9 ) ], [ 'KILL', undef ], 'signal number turned into a name' );
+
+    my $config = parse_raw("FOO=bar\n");
+    is_deeply( [ $config->validate_option( 'check_timeout', '060' ) ], [ 60, undef ], 'object call, timeout made a number' );
+
+    is_deeply( [ $class->validate_option( 'check_kill_sub_pids', '1' ) ], [ 1, undef ], 'check_kill_sub_pids 1' );
+    is_deeply( [ $class->validate_option( 'check_kill_sub_pids', '' ) ], [ 0, undef ], 'check_kill_sub_pids empty is 0' );
+    is_deeply( [ $class->validate_option( 'locking', '0' ) ], [ 0, undef ], 'locking 0' );
+    is_deeply( [ $class->validate_option( 'cache_file', '/tmp/x.cache' ) ], [ '/tmp/x.cache', undef ], 'cache_file kept as is' );
+
+    is_deeply( [ $class->validate_option( 'bogus', 1 ) ], [ undef, 'unknown option "bogus"' ], 'unknown option' );
+    {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push( @warnings, @_ ) };
+        is_deeply( [ $class->validate_option( undef, 1 ) ], [ undef, 'no option name given' ], 'undef option name' );
+        is_deeply( \@warnings, [], 'undef option name does not warn' );
+    }
+    is_deeply(
+        [ $class->validate_option( 'check_timeout', [60] ) ],
+        [ undef, 'option "check_timeout" must be a string or number' ],
+        'reference value'
+    );
+    is_deeply(
+        [ $class->validate_option( 'cache_file', '' ) ],
+        [ undef, 'option "cache_file" may not be empty' ],
+        'empty cache_file'
+    );
+    is_deeply(
+        [ $class->validate_option( 'pid_dir', undef ) ],
+        [ undef, 'option "pid_dir" may not be empty' ],
+        'undef pid_dir'
+    );
+    is_deeply(
+        [ $class->validate_option( 'check_timeout', 0 ) ],
+        [ undef, 'option "check_timeout" must be a whole number of at least 1' ],
+        'check_timeout 0'
+    );
+    is_deeply(
+        [ $class->validate_option( 'check_timeout_signal', 0 ) ],
+        [ undef, 'option "check_timeout_signal" must be a signal name or a signal number other than 0' ],
+        'check_timeout_signal 0'
+    );
+    is_deeply(
+        [ $class->validate_option( 'locking', 'yes' ) ],
+        [ undef, 'option "locking" must be 0 or 1' ],
+        'locking yes'
+    );
+}
+
+#
 # substitute
 #
 {

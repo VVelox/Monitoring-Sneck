@@ -3,19 +3,19 @@
 ## SYNOPSIS
 
 ```
-sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l|-L] [-P <pid dir>] [-r]
+sneck -u [-C <cache file>] [-f <config file>] [-p] [-i] [-d] [-q] [-l|-L] [-P <pid dir>] [-r] [-T <seconds>] [-s <signal>] [-k|-K]
 
 sneck -c [-C <cache file>] [-f <config file>] [-b]
 
-sneck [-f <config file>] [-p] [-i] [-r]
+sneck [-f <config file>] [-p] [-i] [-r] [-T <seconds>] [-s <signal>] [-k|-K]
 
 sneck -t [-f <config file>]
 ```
 
 ## FLAGS
 
-The cache file, PID dir, and locking may also be set in the config
-file. Flags override those. See OPTIONS.
+The cache file, PID dir, locking, and check timeout settings may also
+be set in the config file. Flags override those. See OPTIONS.
 
 ### -f config_file
 
@@ -100,6 +100,32 @@ cache file name with `.restarts` added, so by default
 
 Use locking with this to make sure two runs can't restart things at the
 same time.
+
+### -T seconds
+
+Seconds to wait on each check before giving up on it. Overrides
+`check_timeout` in the config.
+
+Default :: 30
+
+### -s signal
+
+Signal to send a check on timeout, such as TERM. Overrides
+`check_timeout_signal` in the config. `none` sends no signal, even if
+the config sets one.
+
+Default :: none
+
+### -k
+
+Also send the timeout signal to all child processes of a check.
+Overrides `check_kill_sub_pids` in the config. Does nothing without a
+timeout signal. This is the default.
+
+### -K
+
+Do not send the timeout signal to child processes of a check. Overrides
+`check_kill_sub_pids` in the config. Can not be used with -k.
 
 ### -t
 
@@ -258,12 +284,28 @@ Options are settings for sneck itself. Flags override them.
 - `locking` :: If 1, locking is enabled. The same as -l. -L disables
   it. Takes true and false in YAML.
 
+- `check_timeout` :: Seconds to wait on each check and debug check
+  before giving up on it. Works the same as `timeout` for restarts. A
+  timeout counts as errored, with a exit of -1. The same as -T.
+  Default :: 30
+
+- `check_timeout_signal` :: Signal to send a check on timeout. Works the
+  same as `timeout_signal` for restarts. The same as -s.
+  Default :: none
+
+- `check_kill_sub_pids` :: If 1, the timeout signal is also sent to all
+  child processes of the check. Works the same as `kill_sub_pids` for
+  restarts. The same as -k. -K disables it. Takes true and false in YAML.
+  Default :: 1
+
 Any other option is an error.
 
 ```
 $cache_file=/var/db/sneck/sneck.cache
 $pid_dir=/var/run/sneck
 $locking=1
+$check_timeout=60
+$check_timeout_signal=TERM
 ```
 
 ```
@@ -271,6 +313,8 @@ options:
   cache_file: /var/db/sneck/sneck.cache
   pid_dir: /var/run/sneck
   locking: true
+  check_timeout: 60
+  check_timeout_signal: TERM
 ```
 
 ## RESTARTS
@@ -420,10 +464,11 @@ For the following `$name` is the name of the check ran.
 
 - .data.checks.$name.output :: The output of the check.
 
-- .data.checks.$name.exit :: The exit code.
+- .data.checks.$name.exit :: The exit code. 128 plus the signal number if it
+  died on a signal. -1 if it timed out or could not be executed.
 
-- .data.checks.$name.error :: Only present it died on a signal or
-  could not be executed. Provides a brief description.
+- .data.checks.$name.error :: Only present if it died on a signal, timed
+  out, or could not be executed. Provides a brief description.
 
 - $hash{data}{checks}{$name}{run_time} :: How long it took to run the checks.
 
@@ -437,10 +482,11 @@ For the following `$name` is the name of the debug check ran.
 
 - .data.debugs.$name.output :: The output of the check.
 
-- .data.debugs.$name.exit :: The exit code.
+- .data.debugs.$name.exit :: The exit code. 128 plus the signal number if it
+  died on a signal. -1 if it timed out or could not be executed.
 
-- .data.debugs.$name.error :: Only present it died on a signal or
-  could not be executed. Provides a brief description.
+- .data.debugs.$name.error :: Only present if it died on a signal, timed
+  out, or could not be executed. Provides a brief description.
 
  - $hash{data}{checks}{$name}{run_time} :: How long it took to run the debug.
 

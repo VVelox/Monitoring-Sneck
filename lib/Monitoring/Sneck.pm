@@ -114,10 +114,11 @@ For below '$name' is the name of the check in question.
 
     - $hash{data}{checks}{$name}{exit} :: The exit code. If it died on a
       signal, this is 128 plus the signal number. If it could not be
-      executed, this is -1.
+      executed or timed out, this is -1.
 
-    - $hash{data}{checks}{$name}{error} :: Only present it died on a
-      signal or could not be executed. Provides a brief description.
+    - $hash{data}{checks}{$name}{error} :: Only present if it died on a
+      signal, timed out, or could not be executed. Provides a brief
+      description.
 
     - $hash{data}{checks}{$name}{run_time} :: How long it took to run the checks.
 
@@ -137,8 +138,9 @@ For below '$name' is the name of the debug checks in question.
 
     - $hash{data}{debugs}{$name}{exit} :: The exit code. Same as for checks.
 
-    - $hash{data}{debugs}{$name}{error} :: Only present it died on a
-      signal or could not be executed. Provides a brief description.
+    - $hash{data}{debugs}{$name}{error} :: Only present if it died on a
+      signal, timed out, or could not be executed. Provides a brief
+      description.
 
     - $hash{data}{debugs}{$name}{run_time} :: How long it took to run the debug.
 
@@ -222,6 +224,12 @@ they are only reported. Never enable this for something polled by snmpd.
 'state_file' is where restart state, used for min_interval and
 max_retries, is kept. Default :: /var/cache/sneck.cache.restarts
 
+'check_timeout', 'check_timeout_signal', and 'check_kill_sub_pids'
+override the options of the same names in the config. See OPTIONS in
+L<Monitoring::Sneck::Config>. 'check_timeout_signal' may also be 'none'
+to send no signal even if the config sets one. Bad values are reported
+the same as config errors.
+
     my $sneck;
     eval{
         $sneck=Monitoring::Sneck->new({config=>$file, include=>0, debug=>0, restart=>0});
@@ -267,6 +275,10 @@ sub new {
 		debug         => 0,
 		restart       => 0,
 		state_file    => '/var/cache/sneck.cache.restarts',
+		# same defaults as timeout, timeout_signal, and kill_sub_pids for restarts
+		check_timeout        => 30,
+		check_timeout_signal => undef,
+		check_kill_sub_pids  => 1,
 		# alertString lines from failed restarts, added after the checks by _tally_checks
 		restart_alerts => [],
 	};
@@ -309,6 +321,34 @@ sub new {
 		$self->{to_return}{error}       = 1;
 		$self->{to_return}{errorString} = join( '; ',
 			map { $_->{where} . ': ' . $_->{message} } $parsed_config->errors );
+		return $self;
+	}
+
+	# check timeout settings, args over the config over the defaults
+	my $options = $parsed_config->options;
+	my @arg_errors;
+	foreach my $name ( 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids' ) {
+		if ( defined( $options->{$name} ) ) {
+			$self->{$name} = $options->{$name};
+		}
+		if ( !defined( $args{$name} ) ) {
+			next;
+		}
+		if ( $name eq 'check_timeout_signal' && $args{$name} eq 'none' ) {
+			$self->{$name} = undef;
+			next;
+		}
+		my ( $value, $error ) = Monitoring::Sneck::Config->validate_option( $name, $args{$name} );
+		if ( defined($error) ) {
+			push( @arg_errors, 'arg ' . $name . ': ' . $error );
+			next;
+		}
+		$self->{$name} = $value;
+	} ## end foreach my $name ( 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids' )
+	if ( defined( $arg_errors[0] ) ) {
+		$self->{good}                   = 0;
+		$self->{to_return}{error}       = 1;
+		$self->{to_return}{errorString} = join( '; ', @arg_errors );
 		return $self;
 	}
 
@@ -411,6 +451,9 @@ sub run {
 # for check_restart. Does not count it towards ok, warning, and the like.
 # That is done by _tally_checks once everything has run.
 #
+# It is run via _run_command using check_timeout, check_timeout_signal, and
+# check_kill_sub_pids. A timeout gives a exit of -1 and a error.
+#
 # Args...
 #
 #     - type :: Either 'checks' or 'debugs'.
@@ -451,59 +494,24 @@ sub _run_check {
 		warn( $name . ' check string post variable replacement: "' . $check . '"' );
 	}
 
-	my $exit_code;
-	eval {
-		my $check_pid = open3( my $std_in, my $std_out, my $std_err = gensym, $check );
-		# nothing is ever sent, so close it so checks reading stdin get EOF instead of hanging
-		close($std_in);
-		if ( $self->{debug} ) {
-			warn( $name . ' open3 called' );
-		}
-
-		my $s = IO::Select->new();
-		$s->add($std_out);
-		$s->add($std_err);
-		my $output = '';
-		while ( my @ready = $s->can_read ) {
-			foreach my $handle (@ready) {
-				if ( sysread( $handle, my $buf, 4096 ) ) {
-					$output = $output . $buf;
-				} else {
-					$s->remove($handle);
-				}
-			}
-		}
-
-		if ( $self->{debug} ) {
-			warn( $name . ' IO::Select for open3 done... output is... "' . $output . '"' );
-		}
-
-		# call wait pid so we can get the exit code
-		waitpid( $check_pid, 0 );
-		$exit_code = $?;
-		$result->{output} = $output;
-		chomp( $result->{output} );
-	};
-	if ($@) {
-		$exit_code = -1;
-		$result->{output} = $@;
-		chomp( $result->{output} );
+	my $command_result = $self->_run_command( $check, $self->{check_timeout}, $self->{check_timeout_signal},
+		$self->{check_kill_sub_pids} );
+	if ( $self->{debug} ) {
+		warn( $name . ' command done... output is... "' . $command_result->{output} . '"' );
 	}
 
-	# handle the exit code
-	if ( $exit_code == -1 ) {
-		$result->{error} = 'failed to execute';
-	} elsif ( $exit_code & 127 ) {
+	# exit is -1 for timeouts and failing to execute, and 128 + signal for
+	# signal deaths, so neither is mistaken for a nagios exit code of 0 to 3
+	my $exit_code = $command_result->{exit};
+	$result->{output} = $command_result->{output};
+	if ( defined( $command_result->{wait_status} ) && ( $command_result->{wait_status} & 127 ) ) {
 		$result->{error} = sprintf(
 			"child died with signal %d, %s coredump\n",
-			( $exit_code & 127 ),
-			( $exit_code & 128 ) ? 'with' : 'without'
+			( $command_result->{wait_status} & 127 ),
+			( $command_result->{wait_status} & 128 ) ? 'with' : 'without'
 		);
-		# use the shell convention of 128 + signal so a signal death is never
-		# mistaken for a nagios exit code of 0 to 3 and is counted as errored
-		$exit_code = 128 + ( $exit_code & 127 );
-	} else {
-		$exit_code = $exit_code >> 8;
+	} elsif ( defined( $command_result->{error} ) ) {
+		$result->{error} = $command_result->{error};
 	}
 	$result->{exit} = $exit_code;
 
@@ -820,7 +828,7 @@ sub _run_restart {
 	my $command_result;
 	{
 		local @ENV{ keys(%sneck_env) } = values(%sneck_env);
-		$command_result = $self->_run_restart_command( $ran_command, $restart->{timeout}, $restart->{timeout_signal},
+		$command_result = $self->_run_command( $ran_command, $restart->{timeout}, $restart->{timeout_signal},
 			$restart->{kill_sub_pids} );
 	}
 
@@ -870,10 +878,11 @@ sub _run_restart {
 	return;
 } ## end sub _run_restart
 
-# Runs a restart command with a timeout and returns its results.
+# Runs a check or restart command with a timeout and returns its results.
+# Used by _run_check and _run_restart.
 #
-# The command is run via open3, the same as checks. Output from stdout and
-# stderr is collected until the command exits. It does not wait for the
+# The command is run via open3. Output from stdout and stderr is collected
+# until the command exits. It does not wait for the
 # pipes to close, as a daemon started by the command may keep them open.
 #
 # On timeout, if a signal is given, it is sent to the command, and to its
@@ -906,17 +915,20 @@ sub _run_restart {
 #       not be executed. On timeout with a signal, says it was sent along
 #       with any problems sending it.
 #
+#     - wait_status :: The raw $? from waitpid, or undef if it timed out or
+#       could not be executed.
+#
 # Example...
 #
-#     my $result = $self->_run_restart_command( '/usr/sbin/service apache24 restart', 30, undef, 1 );
-#     # $result is { output => 'Performing sanity check...', exit => 0 }
+#     my $result = $self->_run_command( '/usr/sbin/service apache24 restart', 30, undef, 1 );
+#     # $result is { output => 'Performing sanity check...', exit => 0, wait_status => 0 }
 #
-#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1, undef, 1 );
+#     my $result = $self->_run_command( '/bin/sleep 60', 1, undef, 1 );
 #     # $result is { output => '', exit => -1, error => 'timed out after 1 seconds' }
 #
-#     my $result = $self->_run_restart_command( '/bin/sleep 60', 1, 'TERM', 1 );
+#     my $result = $self->_run_command( '/bin/sleep 60', 1, 'TERM', 1 );
 #     # $result is { output => '', exit => -1, error => 'timed out after 1 seconds, sent SIGTERM' }
-sub _run_restart_command {
+sub _run_command {
 	my ( $self, $command, $timeout, $timeout_signal, $kill_sub_pids ) = @_;
 
 	my %result = ( output => '', exit => -1 );
@@ -1001,18 +1013,21 @@ sub _run_restart_command {
 			}
 		}
 	} elsif ( $wait_status & 127 ) {
+		$result{wait_status} = $wait_status;
 		$result{exit}  = 128 + ( $wait_status & 127 );
 		$result{error} = 'child died with signal ' . ( $wait_status & 127 );
 	} else {
-		$result{exit} = $wait_status >> 8;
+		$result{wait_status} = $wait_status;
+		$result{exit}        = $wait_status >> 8;
 	}
 
 	return \%result;
-} ## end sub _run_restart_command
+} ## end sub _run_command
 
 # Sends a signal to every process below a PID, deepest first, so a process
 # is signaled before its parent and is not orphaned out of reach. Children
-# are found via pgrep -P and signaled via pkill -P. Used on restart timeout.
+# are found via pgrep -P and signaled via pkill -P. Used on check and
+# restart timeouts.
 #
 # Args...
 #

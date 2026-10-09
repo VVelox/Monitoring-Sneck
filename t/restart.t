@@ -1520,4 +1520,64 @@ SKIP: {
     is( $ret->{data}{checks}{c1}{exit}, 0, 'rechecked after the delay' );
 }
 
+#
+# check_restart rechecks use check_timeout, with a timed out recheck only
+# counting as still failing if errored is not ignored
+#
+{
+    # recheck.pl is critical until its flag exists, then hangs for 3 seconds.
+    my $recheck_script = write_file( $dir . '/recheck.pl', <<'END' );
+my $flag = shift;
+$| = 1;
+if ( -e $flag ) {
+    print "rechecking\n";
+    sleep 3;
+    exit 0;
+}
+print "down\n";
+exit 2;
+END
+    # arm.pl creates the flag, so the recheck hangs.
+    my $arm_script = write_file( $dir . '/arm.pl', <<'END' );
+open( my $fh, '>', shift ) or die($!);
+exit 0;
+END
+    my $flag = $dir . '/recheck.flag';
+
+    # Runs c1 with a restart that arms it, using the given extra restart options.
+    my $run_recheck = sub {
+        my ($options) = @_;
+        reset_all();
+        unlink($flag);
+        my $start = Time::HiRes::time;
+        my $ret
+            = new_sneck( "\$check_timeout=1\n"
+                . "c1|$perl $recheck_script $flag\n"
+                . "\@r1|checks=c1 check_restart=1 check_restart_delay=0 $options|$perl $arm_script $flag\n" )->run;
+        ok( Time::HiRes::time - $start < 3, 'gave up on the recheck at the timeout with "' . $options . '"' );
+        return $ret;
+    };
+
+    my $ret = $run_recheck->('ignore_errored=0');
+    my $c1  = $ret->{data}{checks}{c1};
+    is( $c1->{error},        'timed out after 1 seconds', 'recheck timeout error' );
+    is( $c1->{exit},         -1,                          'recheck timeout exit is -1' );
+    is( $c1->{output},       'rechecking',                'recheck output from before the timeout kept' );
+    is( $c1->{rechecked_by}, 'r1',                        'timed out recheck has rechecked_by set' );
+    ok( $c1->{run_time} >= 1, 'recheck waited the full timeout' ) or diag( 'run_time ' . $c1->{run_time} );
+    is( $ret->{data}{errored},  1, 'timed out recheck counted as errored' );
+    is( $ret->{data}{critical}, 0, 'timed out recheck no longer counted as critical' );
+    my $r1 = $ret->{data}{restarts}{r1};
+    is( $r1->{exit}, 0, 'restart command exited 0' );
+    is( $r1->{error}, 'checks still failing after restart: c1', 'timed out recheck still failing with ignore_errored=0' );
+    is_deeply( $r1->{recheck_failed_checks}, ['c1'], 'timed out recheck listed as still failing' );
+    is( $ret->{data}{alert}, 1, 'alert set for the still failing restart' );
+
+    $ret = $run_recheck->('ignore_errored=1');
+    $r1  = $ret->{data}{restarts}{r1};
+    is( $ret->{data}{checks}{c1}{error}, 'timed out after 1 seconds', 'recheck timeout error with ignore_errored=1' );
+    ok( !exists( $r1->{error} ), 'timed out recheck not a failure with ignore_errored=1' );
+    is_deeply( $r1->{recheck_failed_checks}, [], 'timed out recheck not listed with ignore_errored=1' );
+}
+
 done_testing();

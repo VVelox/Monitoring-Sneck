@@ -208,7 +208,8 @@ so redefinitions can not be caught like they are in the sneck format.
 =head1 OPTIONS
 
 Options are settings for sneck itself. Options given on the command
-line override these. L<Monitoring::Sneck> does not use them.
+line override these. cache_file, pid_dir, and locking are only used by
+sneck, not L<Monitoring::Sneck>.
 
     - cache_file :: The cache file. The same as B<-C> for sneck.
       May not be empty.
@@ -219,16 +220,37 @@ line override these. L<Monitoring::Sneck> does not use them.
     - locking :: If 1, locking is enabled. The same as B<-l> for sneck.
       B<-L> disables it. Takes true and false in YAML.
 
+    - check_timeout :: Seconds to wait on each check and debug check
+      before giving up on it. Works the same as timeout for restarts.
+      A timeout counts as errored, with a exit of -1. The same as B<-T>
+      for sneck.
+      Default :: 30
+
+    - check_timeout_signal :: Signal to send a check on timeout. Works
+      the same as timeout_signal for restarts. The same as B<-s> for
+      sneck.
+      Default :: none
+
+    - check_kill_sub_pids :: If 1, the timeout signal is also sent to
+      all child processes of the check. Works the same as kill_sub_pids
+      for restarts. The same as B<-k> for sneck. B<-K> disables it.
+      Takes true and false in YAML.
+      Default :: 1
+
 Any other option is an error.
 
     $cache_file=/var/db/sneck/sneck.cache
     $pid_dir=/var/run/sneck
     $locking=1
+    $check_timeout=60
+    $check_timeout_signal=TERM
 
     options:
       cache_file: /var/db/sneck/sneck.cache
       pid_dir: /var/run/sneck
       locking: true
+      check_timeout: 60
+      check_timeout_signal: TERM
 
 =head1 RESTARTS
 
@@ -569,8 +591,9 @@ sub warnings {
 
 Returns a hash ref of the options set in the config, with the names as
 keys. Options not set are left out, so the caller can fall back to its
-own defaults. Invalid ones are also left out. locking is always 0 or 1.
-This is a copy, so changing it does not change the config.
+own defaults. Invalid ones are also left out. Values are in the
+standard form described under validate_option. This is a copy, so
+changing it does not change the config.
 
     my $cache_file = $config->options->{cache_file};
 
@@ -579,6 +602,79 @@ This is a copy, so changing it does not change the config.
 sub options {
 	return { %{ $_[0]->{options} } };
 }
+
+=head2 validate_option
+
+Validates a option value and puts it in a standard form, the same as is
+done for the config. May be called on the class or a object.
+
+Two arguments are taken, the option name and the value.
+
+Returns two values. The first is the value in standard form or undef if
+it is not valid. The second is undef if it is valid or a error message.
+
+The standard forms are as below.
+
+    - locking, check_kill_sub_pids :: 0 or 1.
+
+    - check_timeout :: A number.
+
+    - check_timeout_signal :: The signal name without the SIG prefix,
+      such as TERM. Numbers are turned into names.
+
+    my ( $signal, $error ) = Monitoring::Sneck::Config->validate_option( 'check_timeout_signal', 'sigterm' );
+    # $signal is 'TERM' and $error is undef
+
+    my ( $timeout, $error ) = Monitoring::Sneck::Config->validate_option( 'check_timeout', 0 );
+    # $timeout is undef and $error is 'option "check_timeout" must be a whole number of at least 1'
+
+=cut
+
+sub validate_option {
+	my ( $self, $name, $value ) = @_;
+
+	if ( !defined($name) ) {
+		return ( undef, 'no option name given' );
+	}
+
+	my $label = 'option "' . $name . '"';
+
+	my %known = map { $_ => 1 } ( 'cache_file', 'pid_dir', 'locking', 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids' );
+	if ( !$known{$name} ) {
+		return ( undef, 'unknown ' . $label );
+	}
+
+	if ( ref($value) ) {
+		return ( undef, $label . ' must be a string or number' );
+	}
+
+	if ( $name eq 'locking' || $name eq 'check_kill_sub_pids' ) {
+		if ( !defined($value) || $value !~ /^[01]?$/ ) {
+			return ( undef, $label . ' must be 0 or 1' );
+		}
+		return ( $value ? 1 : 0, undef );
+	}
+
+	if ( $name eq 'check_timeout' ) {
+		if ( !defined($value) || $value !~ /^[0-9]+$/ || $value < 1 ) {
+			return ( undef, $label . ' must be a whole number of at least 1' );
+		}
+		return ( $value + 0, undef );
+	}
+
+	if ( $name eq 'check_timeout_signal' ) {
+		my $signal = $self->_signal_name($value);
+		if ( !defined($signal) ) {
+			return ( undef, $label . ' must be a signal name or a signal number other than 0' );
+		}
+		return ( $signal, undef );
+	}
+
+	if ( !defined($value) || $value eq '' ) {
+		return ( undef, $label . ' may not be empty' );
+	}
+	return ( $value, undef );
+} ## end sub validate_option
 
 =head2 vars
 
@@ -991,17 +1087,16 @@ sub _parse_yaml {
 	return;
 } ## end sub _parse_yaml
 
-# Validates and adds a option. Used by both parsers. Records a error if the
-# option is unknown or its value is bad, in which case it is not added.
+# Validates and adds a option via validate_option. Used by both parsers.
+# Records a error if the option is unknown or its value is bad, in which
+# case it is not added.
 #
 # Args...
 #
 #     - name :: The name of the option, without the leading $ used by the
 #       sneck format.
 #
-#     - value :: The value. For YAML this may be undef or, in error, a
-#       reference. YAML false comes through as a empty string and is taken
-#       as 0 for locking.
+#     - value :: The value, as taken by validate_option.
 #
 #     - location :: Hash ref of where it was defined, as taken by
 #       _add_problem.
@@ -1018,30 +1113,13 @@ sub _parse_yaml {
 sub _add_option {
 	my ( $self, $name, $value, $location ) = @_;
 
-	my $label = 'option "' . $name . '"';
-
-	if ( $name ne 'cache_file' && $name ne 'pid_dir' && $name ne 'locking' ) {
-		$self->_add_problem( 'errors', $location, 'unknown ' . $label );
+	my ( $validated, $error ) = $self->validate_option( $name, $value );
+	if ( defined($error) ) {
+		$self->_add_problem( 'errors', $location, $error );
 		return 0;
 	}
 
-	if ( ref($value) ) {
-		$self->_add_problem( 'errors', $location, $label . ' must be a string or number' );
-		return 0;
-	}
-
-	if ( $name eq 'locking' ) {
-		if ( !defined($value) || $value !~ /^[01]?$/ ) {
-			$self->_add_problem( 'errors', $location, $label . ' must be 0 or 1' );
-			return 0;
-		}
-		$value = $value ? 1 : 0;
-	} elsif ( !defined($value) || $value eq '' ) {
-		$self->_add_problem( 'errors', $location, $label . ' may not be empty' );
-		return 0;
-	}
-
-	$self->{options}{$name} = $value;
+	$self->{options}{$name} = $validated;
 	return 1;
 } ## end sub _add_option
 

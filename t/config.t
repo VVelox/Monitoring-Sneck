@@ -409,6 +409,20 @@ sub warning_list {
 }
 
 #
+# a bad timeout_signal alone makes the config invalid
+#
+foreach my $signal ( '0', 'ZERO', 'NOPE', '' ) {
+    my $config = parse_raw( "a|/bin/true\n\@r|checks=a timeout_signal=" . $signal . "|/bin/true\n" );
+    ok( !$config->is_valid, 'timeout_signal "' . $signal . '" makes the config invalid' );
+    is_deeply(
+        error_list($config),
+        ['2: restart "r" option "timeout_signal" must be a signal name or a signal number other than 0'],
+        'timeout_signal "' . $signal . '" is the only error'
+    );
+    is_deeply( $config->restarts, {}, 'restart with timeout_signal "' . $signal . '" left out' );
+}
+
+#
 # restart errors found once everything is parsed
 #
 {

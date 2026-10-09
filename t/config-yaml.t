@@ -473,6 +473,28 @@ if ( !$have_yaml ) {
 }
 
 #
+# a bad timeout_signal alone makes the config invalid
+#
+foreach my $signal ( '0', 'ZERO', 'NOPE', "''" ) {
+    my $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "restarts:\n"
+            . "  r:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    timeout_signal: "
+            . $signal
+            . "\n" );
+    ok( !$config->is_valid, 'YAML timeout_signal ' . $signal . ' makes the config invalid' );
+    is_deeply(
+        error_list($config),
+        ['restarts.r: restart "r" option "timeout_signal" must be a signal name or a signal number other than 0'],
+        'YAML timeout_signal ' . $signal . ' is the only error'
+    );
+    is_deeply( $config->restarts, {}, 'YAML restart with timeout_signal ' . $signal . ' left out' );
+}
+
+#
 # empty restarts section, and bad restart names
 #
 {

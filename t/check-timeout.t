@@ -77,12 +77,12 @@ END
 # defaults, config options, and args overriding them
 #
 {
-    my $sneck = new_sneck("c1|/bin/true\n");
+    my $sneck = new_sneck("c1|$perl -e 1\n");
     is( $sneck->{check_timeout}, 30, 'default check_timeout' );
     ok( !defined( $sneck->{check_timeout_signal} ), 'default check_timeout_signal' );
     is( $sneck->{check_kill_sub_pids}, 1, 'default check_kill_sub_pids' );
 
-    my $config = "\$check_timeout=5\n\$check_timeout_signal=sigkill\n\$check_kill_sub_pids=0\nc1|/bin/true\n";
+    my $config = "\$check_timeout=5\n\$check_timeout_signal=sigkill\n\$check_kill_sub_pids=0\nc1|$perl -e 1\n";
     $sneck = new_sneck($config);
     is( $sneck->{check_timeout},        5,      'config check_timeout' );
     is( $sneck->{check_timeout_signal}, 'KILL', 'config check_timeout_signal' );
@@ -96,7 +96,7 @@ END
     $sneck = new_sneck( $config, check_timeout_signal => 'none' );
     ok( !defined( $sneck->{check_timeout_signal} ), 'arg check_timeout_signal none clears config' );
 
-    $sneck = new_sneck( "c1|/bin/true\n", check_timeout => 0, check_timeout_signal => 'BOGUS', check_kill_sub_pids => 2 );
+    $sneck = new_sneck( "c1|$perl -e 1\n", check_timeout => 0, check_timeout_signal => 'BOGUS', check_kill_sub_pids => 2 );
     is( $sneck->{good}, 0, 'bad args make it not good' );
     is(
         $sneck->run->{errorString},
@@ -117,7 +117,7 @@ END
         = "\$check_timeout=1\n"
         . "c1|$perl $hang_script $marker\n"
         . "%d1|$perl $hang_script $debug_marker\n"
-        . "c2|/bin/true\n";
+        . "c2|$perl -e 1\n";
     my $start = Time::HiRes::time;
     my $ret   = new_sneck($config)->run;
     my $took  = Time::HiRes::time - $start;

@@ -16,6 +16,7 @@ Revision history for Monitoring-Sneck
         - add restarts, run via -r, with thresholds, depends, cascade,
           cooldown, max retries, and timeouts
         - cache files are now written atomically
+        - checks get a closed stdin so ones reading it no longer hang
 
 1.4.2   2026-09-11/16:00
         - add in error handling for open3

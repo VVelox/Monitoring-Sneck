@@ -296,6 +296,24 @@ SKIP: {
 }
 
 #
+# run() gives checks a closed stdin, so one reading it gets EOF instead of hanging
+#
+{
+    my $cfg   = write_config("stdin_check|/bin/cat\n");
+    my $sneck = Monitoring::Sneck->new( { config => $cfg } );
+    my $ret;
+    eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm 10;
+        $ret = $sneck->run;
+        alarm 0;
+    };
+    is( $@, '', 'check reading stdin did not hang' );
+    is( defined($ret) ? $ret->{data}{checks}{stdin_check}{exit}   : undef, 0,  'check reading stdin exits 0' );
+    is( defined($ret) ? $ret->{data}{checks}{stdin_check}{output} : undef, '', 'check reading stdin got nothing' );
+}
+
+#
 # run() multi-line output only has the final newline removed
 #
 {

@@ -8,6 +8,7 @@ use File::Spec ();
 use JSON       qw(decode_json);
 use MIME::Base64           qw(decode_base64);
 use IO::Uncompress::Gunzip qw(gunzip);
+use POSIX                  ();
 
 if ( $^O eq 'MSWin32' ) {
     plan skip_all => 'list form pipe open not supported on Windows';
@@ -37,6 +38,29 @@ sub run_sneck {
     my $stdout = do { local $/; <$pipe> };
     close($pipe);
     return ( defined($stdout) ? $stdout : '', $? >> 8 );
+}
+
+# Runs sneck with the given args, also capturing stderr.
+#
+# stderr is sent to a temp file while sneck runs, so it can't fill a pipe
+# and block.
+#
+# Returns the stdout, stderr, and exit code.
+#
+#     my ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-d', '-f', $cfg );
+sub run_sneck_stderr {
+    my @args = @_;
+    my ( $stderr_fh, $stderr_file ) = tempfile( DIR => $dir, SUFFIX => '.stderr' );
+    close($stderr_fh);
+
+    open( my $saved_stderr, '>&', \*STDERR ) or die( 'failed to save stderr... ' . $! );
+    open( STDERR, '>', $stderr_file ) or die( 'failed to redirect stderr... ' . $! );
+    my ( $stdout, $exit_code ) = eval { run_sneck(@args) };
+    my $error = $@;
+    open( STDERR, '>&', $saved_stderr ) or die( 'failed to restore stderr... ' . $! );
+    die($error) if $error;
+
+    return ( $stdout, slurp($stderr_file), $exit_code );
 }
 
 # Reads a whole file and returns its contents.
@@ -303,14 +327,156 @@ SKIP: {
     ok( !-e $cache . '.restarts', 'without -r no state file' );
 
     $cache = File::Spec->catfile( $dir, 'restart.cache' );
-    ( $stdout, $exit_code ) = run_sneck( '-u', '-r', '-f', $cfg, '-C', $cache );
+    my $stderr;
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-r', '-f', $cfg, '-C', $cache );
     is( $exit_code, 0, '-u -r exits 0' );
+    is(
+        $stderr,
+        "-r used without -l, so overlapping runs may restart things more than once\n",
+        '-r without -l warns'
+    );
     is( decode_json($stdout)->{data}{restarts}{r1}{ran}, 1, '-r runs restarts' );
     is( slurp($restart_log), "r1\n", '-r restarted r1' );
     ok( -f $cache . '.restarts', '-r keeps state next to the cache file' );
 
-    ( $stdout, $exit_code ) = run_sneck( '-r', '-f', $cfg, '-C', $cache );
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-r', '-f', $cfg, '-C', $cache );
     like( decode_json($stdout)->{data}{restarts}{r1}{reason}, qr/^cooldown/, '-r without -u uses the same state' );
+}
+
+#
+# -l with -r stops a second run while the first is still restarting things.
+# The pid file normally goes in /var/run, so a wrapper points it at a temp
+# dir before running sneck.
+#
+{
+    my $pid_dir = tempdir( DIR => $dir );
+    local $ENV{SNECK_TEST_PID_DIR} = $pid_dir;
+    my $wrapper = File::Spec->catfile( $dir, 'pid_dir_wrapper.pl' );
+    open( my $wrapper_fh, '>', $wrapper ) or die( 'failed to write "' . $wrapper . '"... ' . $! );
+    print $wrapper_fh <<'END';
+use Proc::PID::File ();
+my $running = \&Proc::PID::File::running;
+{
+    no warnings 'redefine';
+    *Proc::PID::File::running = sub {
+        my $class = shift;
+        return $running->( $class, dir => $ENV{SNECK_TEST_PID_DIR} );
+    };
+}
+my $script = shift(@ARGV);
+$0 = $script;
+do($script);
+die($@) if $@;
+END
+    close($wrapper_fh);
+
+    my ( $fh, $restart_log ) = tempfile( DIR => $dir, SUFFIX => '.log' );
+    close($fh);
+    my $restart_script = File::Spec->catfile( $dir, 'slow_restart.pl' );
+    open( my $restart_fh, '>', $restart_script ) or die( 'failed to write "' . $restart_script . '"... ' . $! );
+    print $restart_fh 'open( my $f, ">>", shift ); print $f "r1\n"; close($f); sleep 3;' . "\n";
+    close($restart_fh);
+    my $cfg   = write_config( "crit_check|$perl -e 'exit 2'\n" . "\@r1|checks=crit_check|$perl $restart_script $restart_log\n" );
+    my $cache = File::Spec->catfile( $dir, 'lock.cache' );
+    my ( $first_stderr_fh, $first_stderr ) = tempfile( DIR => $dir, SUFFIX => '.stderr' );
+    close($first_stderr_fh);
+
+    my $first_pid = fork();
+    die( 'fork failed... ' . $! ) if !defined($first_pid);
+    if ( !$first_pid ) {
+        open( STDOUT, '>', '/dev/null' ) or POSIX::_exit(127);
+        open( STDERR, '>', $first_stderr ) or POSIX::_exit(127);
+        exec( $perl, '-I' . $lib, $wrapper, $script, '-u', '-r', '-l', '-q', '-f', $cfg, '-C', $cache )
+            or POSIX::_exit(127);
+    }
+
+    my $deadline = time + 10;
+    while ( time < $deadline && slurp($restart_log) eq '' ) {
+        select( undef, undef, undef, 0.05 );
+    }
+
+    my @second_command = ( $perl, '-I' . $lib, $wrapper, $script, '-u', '-r', '-l', '-q', '-f', $cfg, '-C', $cache );
+    my ( $stderr_fh, $stderr_file ) = tempfile( DIR => $dir, SUFFIX => '.stderr' );
+    close($stderr_fh);
+    open( my $saved_stderr, '>&', \*STDERR ) or die( 'failed to save stderr... ' . $! );
+    open( STDERR, '>', $stderr_file ) or die( 'failed to redirect stderr... ' . $! );
+    system(@second_command);
+    my $second_exit = $? >> 8;
+    open( STDERR, '>&', $saved_stderr ) or die( 'failed to restore stderr... ' . $! );
+
+    waitpid( $first_pid, 0 );
+    my $first_exit = $? >> 8;
+
+    isnt( $second_exit, 0, '-l second run exits non-zero while the first is running' );
+    like( slurp($stderr_file), qr/^Already running as $first_pid /, '-l second run says who is running' );
+    is( $first_exit, 0, '-l first run exits 0' );
+    is( slurp($first_stderr), '', '-r with -l does not warn' );
+    is( slurp($restart_log), "r1\n", '-l only the first run restarted' );
+}
+
+#
+# -d prints debugging info to stderr without changing the JSON
+#
+{
+    my ( $fh, $restart_log ) = tempfile( DIR => $dir, SUFFIX => '.log' );
+    close($fh);
+    my $cfg = write_config( $ok_check
+            . "crit_check|$perl -e 'exit 2'\n"
+            . "\@r1|checks=crit_check min_interval=0|$perl -e 'open(my \$f, q(>>), q($restart_log))'\n" );
+    my $cache = File::Spec->catfile( $dir, 'debug.cache' );
+    my ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-d', '-r', '-f', $cfg, '-C', $cache );
+    is( $exit_code, 0, '-d exits 0' );
+    my $decoded = eval { decode_json($stdout) };
+    ok( defined $decoded, '-d still prints JSON' );
+    is( $decoded->{data}{ok}, 1, '-d JSON holds the results' );
+    like( $stderr, qr/run started at/,                       '-d prints run start' );
+    like( $stderr, qr/ok_check processing started at/,       '-d prints each check' );
+    like( $stderr, qr/ok_check exit code is 0/,              '-d prints check exit codes' );
+    like( $stderr, qr/restart r1 running for threshold/,     '-d prints restarts' );
+    like( $stderr, qr/restart r1 exit code is 0/,            '-d prints restart exit codes' );
+    like( $stderr, qr/run is returning now/,                 '-d prints run end' );
+
+    ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-f', $cfg, '-C', $cache );
+    unlike( $stderr, qr/run started at/, 'no debugging info without -d' );
+}
+
+#
+# -u with a cache file that can't be written prints the JSON, then fails
+#
+{
+    my $cfg   = write_config($ok_check);
+    my $cache = File::Spec->catfile( $dir, 'no', 'such', 'dir', 'sneck.cache' );
+    my ( $stdout, $stderr, $exit_code ) = run_sneck_stderr( '-u', '-f', $cfg, '-C', $cache );
+    isnt( $exit_code, 0, 'unwritable cache exits non-zero' );
+    my $decoded = eval { decode_json($stdout) };
+    is( defined($decoded) ? $decoded->{data}{ok} : undef, 1, 'JSON still printed before the write fails' );
+    my $missing_dir = File::Spec->catdir( $dir, 'no', 'such', 'dir' );
+    like( $stderr, qr/\Q$missing_dir\E/, 'write failure reported on stderr' );
+    ok( !-e $cache, 'no cache file' );
+}
+
+#
+# -t reports restart errors and warnings
+#
+{
+    my $cfg = write_config( $ok_check
+            . "\@r1|checks=nope depends=ghost|/bin/echo %NOPE%\n"
+            . "\@r2|checks=ok_check|/bin/echo %ALSO_NOPE%\n" );
+    my ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 1, '-t with restart errors exits 1' );
+    is(
+        $stdout,
+        'error: line 2: restart "r1" watches unknown check "nope"' . "\n"
+            . 'error: line 2: restart "r1" depends on unknown restart "ghost"' . "\n"
+            . 'warning: line 2: restart "r1" uses undefined variable "NOPE"' . "\n"
+            . 'warning: line 3: restart "r2" uses undefined variable "ALSO_NOPE"' . "\n",
+        '-t prints restart errors and warnings'
+    );
+
+    $cfg = write_config( $ok_check . "\@r1|checks=ok_check|/bin/echo %NOPE%\n" );
+    ( $stdout, $exit_code ) = run_sneck( '-t', '-f', $cfg );
+    is( $exit_code, 0, '-t with only restart warnings exits 0' );
+    like( $stdout, qr/^warning: line 2: restart "r1" uses undefined variable "NOPE"\nconfig OK: /, '-t prints restart warning then OK' );
 }
 
 #

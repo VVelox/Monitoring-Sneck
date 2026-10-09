@@ -435,6 +435,32 @@ sub warning_list {
 }
 
 #
+# spaces after commas in lists split the option, so the rest is not key=value
+#
+{
+    my $config = parse_raw("a|/bin/true\nb|/bin/true\n\@r|checks=a, b|/bin/true\n");
+    is_deeply(
+        [ sort @{ error_list($config) } ],
+        [
+            '3: restart "r" option "b" is not in the form key=value',
+            '3: restart "r" option "checks" has the invalid name ""',
+        ],
+        'space after comma reported'
+    );
+    is_deeply( $config->restarts, {}, 'restart with space after comma not kept' );
+}
+
+#
+# a restart may share a name with a check
+#
+{
+    my $config = parse_raw("web|/bin/true\n\@web|checks=web|/bin/true\n");
+    ok( $config->is_valid, 'restart sharing a check name is valid' );
+    is( $config->checks->{web}, '/bin/true', 'check kept' );
+    is_deeply( $config->restarts->{web}{checks}, ['web'], 'restart kept' );
+}
+
+#
 # restarts defined before the checks they watch, and undefined variable warnings
 #
 {

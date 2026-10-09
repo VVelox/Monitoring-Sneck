@@ -86,7 +86,7 @@ cache file name with '.restarts' added, so by default
 /var/cache/sneck.cache.restarts.
 
 Use B<-l> with this to make sure two runs can't restart things at the
-same time.
+same time. Without B<-l>, a warning saying so is printed to stderr.
 
 See L<Monitoring::Sneck::Config> for how restarts are configured.
 
@@ -208,6 +208,10 @@ if ($print_cache) {
 
 	exit;
 } ## end if ($print_cache)
+
+if ( $restart && !$locking ) {
+	warn("-r used without -l, so overlapping runs may restart things more than once\n");
+}
 
 my $sneck = Monitoring::Sneck->new(
 	{

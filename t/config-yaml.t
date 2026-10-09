@@ -419,6 +419,73 @@ if ( !$have_yaml ) {
 }
 
 #
+# YAML restart option values
+#
+{
+    my $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "restarts:\n"
+            . "  quoted:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    timeout: '30'\n"
+            . "    cascade: '1'\n"
+            . "  bad_values:\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "    threshold: 2.5\n"
+            . "    min_interval: -1\n"
+            . "    max_retries: 1e3\n"
+            . "    timeout: 0\n"
+            . "    cascade: 2\n"
+            . "    ignore_unknown: yes\n"
+            . "    ignore_errored: ~\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'restarts.bad_values: restart "bad_values" option "cascade" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "ignore_unknown" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "ignore_errored" must be 0 or 1',
+            'restarts.bad_values: restart "bad_values" option "max_retries" must be a whole number of at least 0',
+            'restarts.bad_values: restart "bad_values" option "min_interval" must be a whole number of at least 0',
+            'restarts.bad_values: restart "bad_values" option "threshold" must be a whole number of at least 1',
+            'restarts.bad_values: restart "bad_values" option "timeout" must be a whole number of at least 1',
+        ],
+        'YAML restart option values checked'
+    );
+    is( $config->restarts->{quoted}{timeout}, 30, 'quoted number accepted' );
+    is( $config->restarts->{quoted}{cascade}, 1,  'quoted 0/1 accepted' );
+}
+
+#
+# empty restarts section, and bad restart names
+#
+{
+    my $config = parse_yaml("checks:\n  a: /bin/true\nrestarts:\n");
+    ok( $config->is_valid, 'empty restarts section valid' );
+    is_deeply( $config->restarts, {}, 'no restarts' );
+
+    $config = parse_yaml( "checks:\n"
+            . "  a: /bin/true\n"
+            . "restarts:\n"
+            . "  'bad name':\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n"
+            . "  'bad-dash':\n"
+            . "    command: /bin/true\n"
+            . "    checks: [a]\n" );
+    is_deeply(
+        error_list($config),
+        [
+            'restarts.bad name: name "bad name" may only contain A-Z, a-z, 0-9, and _',
+            'restarts.bad-dash: name "bad-dash" may only contain A-Z, a-z, 0-9, and _',
+        ],
+        'bad restart names reported'
+    );
+    is_deeply( $config->restarts, {}, 'bad named restarts not kept' );
+}
+
+#
 # Monitoring::Sneck with a YAML config
 #
 {

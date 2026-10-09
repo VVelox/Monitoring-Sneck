@@ -232,8 +232,8 @@ Options are as below.
       run the check.
       Default :: 1
 
-    - min_interval :: Minimum seconds between runs of this restart. 0
-      turns it off.
+    - min_interval :: Minimum seconds from when this restart last
+      finished to when it may run again. 0 turns it off.
       Default :: 180
 
     - max_retries :: How many times in a row it will run for its

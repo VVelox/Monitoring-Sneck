@@ -376,6 +376,8 @@ sub run {
 		my $exit_code;
 		eval {
 			my $check_pid = open3( my $std_in, my $std_out, my $std_err = gensym, $check );
+			# nothing is ever sent, so close it so checks reading stdin get EOF instead of hanging
+			close($std_in);
 			if ( $self->{debug} ) {
 				warn( $name . ' open3 called' );
 			}
@@ -518,7 +520,9 @@ sub run {
 # Before running, it is skipped if a depend failed or was itself skipped
 # for that reason, and held back by min_interval and, for threshold
 # triggered runs, max_retries. State for those two is kept in the state
-# file.
+# file. It is written before each restart runs, so a run that is killed
+# part way through still counts, and again once all are done. last_run is
+# set to when each restart finished.
 #
 # Example...
 #
@@ -560,13 +564,21 @@ sub _handle_restarts {
 	}
 
 	my ( $state, $state_error ) = $self->_read_restart_state;
-	my $now = int(time);
+	my $write_error;
+
+	# forget restarts no longer in the config
+	foreach my $name ( keys( %{$state} ) ) {
+		if ( !defined( $restarts->{$name} ) ) {
+			delete( $state->{$name} );
+		}
+	}
 
 	# 'ok' or 'failed' for those that ran, 'skipped' for those skipped because a depend failed
 	my %status;
 	foreach my $name ( $self->_restart_order($restarts) ) {
 		my $restart = $restarts->{$name};
 		my $result  = $data->{restarts}{$name};
+		my $now     = int(time);
 		if ( !defined( $state->{$name} ) ) {
 			$state->{$name} = { last_run => 0, attempts => 0 };
 		}
@@ -606,26 +618,31 @@ sub _handle_restarts {
 			{
 				$result->{reason} = 'max retries reached';
 			} else {
-				$self->_run_restart( $name, $restart, $result, $run_reason );
+				# save the run before it starts, so it still counts if sneck dies while it runs
 				$state_item->{last_run} = $now;
 				if ( $run_reason eq 'threshold' ) {
 					$state_item->{attempts}++;
 				}
+				my $error = $self->_write_restart_state($state);
+				if ( defined($error) ) {
+					$write_error = $error;
+				}
+
+				$self->_run_restart( $name, $restart, $result, $run_reason );
+
+				# min_interval is counted from when it finished
+				$state_item->{last_run} = int(time);
 				$status{$name} = defined( $result->{error} ) || $result->{exit} != 0 ? 'failed' : 'ok';
-			}
+			} ## end else [ if ( defined($failed_depend) ) ]
 		} ## end if ( defined($run_reason) )
 
 		$result->{attempts} = $state_item->{attempts};
 	} ## end foreach my $name ( $self->_restart_order($restarts) )
 
-	# forget restarts no longer in the config
-	foreach my $name ( keys( %{$state} ) ) {
-		if ( !defined( $restarts->{$name} ) ) {
-			delete( $state->{$name} );
-		}
+	my $error = $self->_write_restart_state($state);
+	if ( defined($error) ) {
+		$write_error = $error;
 	}
-
-	my $write_error = $self->_write_restart_state($state);
 	my @state_errors = grep { defined($_) } ( $state_error, $write_error );
 	if ( defined( $state_errors[0] ) ) {
 		$data->{restart_state_error} = join( '; ', @state_errors );
@@ -891,7 +908,8 @@ sub _restart_order {
 # dropped.
 #
 # Returns a hash ref of restart names to hash refs of last_run, epoch
-# seconds of the last time it ran, and attempts, threshold triggered runs
+# seconds of when it last finished, or when it last started if sneck died
+# while it was running, and attempts, threshold triggered runs
 # since its checks last recovered. Also returns a error string or undef.
 #
 # Example...

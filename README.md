@@ -168,6 +168,10 @@ Lines starting with # are comments and are ignored.
   `key=value`, with `checks` and `depends` being comma separated lists.
   Values containing spaces may be quoted with `"` or `'`. See RESTARTS.
 
+- `!name|options|command` :: A compliance check. Laid out the same as a
+  restart. The options may be empty, but the second | is still needed,
+  such as `!foo||/bin/true`. See COMPLIANCE.
+
 Names are made up of `A-Z`, `a-z`, `0-9`, and `_`.
 
 Any other sort of line is an error. Every bad line is reported, along
@@ -178,8 +182,9 @@ variable that is not defined is left as written and produces a warning,
 as it may just be part of the command, such as `date +%Y%m%d`. Use `-t`
 to see warnings.
 
-Option, variable, check, debug check, and restart names may not be
-redefined.
+Option, variable, check, debug check, compliance check, and restart
+names may not be redefined. A compliance check may share a name with a
+check or debug check.
 
 ## EXAMPLE CONFIG
 
@@ -246,6 +251,9 @@ debugs:
 
 - `debugs` :: Debug checks, with the command as the value.
 
+- `compliance` :: Compliance checks, each a mapping of options plus
+  `command`. See COMPLIANCE.
+
 - `restarts` :: Restarts, each a mapping of options plus `command`.
   See RESTARTS.
 
@@ -284,9 +292,11 @@ Options are settings for sneck itself. Flags override them.
 - `locking` :: If 1, locking is enabled. The same as -l. -L disables
   it. Takes true and false in YAML.
 
-- `check_timeout` :: Seconds to wait on each check and debug check
-  before giving up on it. Works the same as `timeout` for restarts. A
-  timeout counts as errored, with a exit of -1. The same as -T.
+- `check_timeout` :: Seconds to wait on each check, debug check, and
+  compliance check before giving up on it. Compliance checks may
+  override it via their `timeout` option. Works the same as `timeout`
+  for restarts. A timeout counts as errored, with a exit of -1. The same
+  as -T.
   Default :: 30
 
 - `check_timeout_signal` :: Signal to send a check on timeout. Works the
@@ -297,6 +307,11 @@ Options are settings for sneck itself. Flags override them.
   child processes of the check. Works the same as `kill_sub_pids` for
   restarts. The same as -k. -K disables it. Takes true and false in YAML.
   Default :: 1
+
+- `compliance_alert` :: If 1, compliance checks that are not ok and not
+  waived also set `.data.alert` and are added to `.data.alertString`.
+  Takes true and false in YAML.
+  Default :: 0
 
 Any other option is an error.
 
@@ -316,6 +331,74 @@ options:
   check_timeout: 60
   check_timeout_signal: TERM
 ```
+
+## COMPLIANCE
+
+A compliance check is a nagios style check for how a system is set up,
+such as root logins being off or a file having the right mode, rather
+than if something is working. They run the same as checks, but are
+counted separately and set `.data.compliance_alert` instead of
+`.data.alert`. Set the `compliance_alert` option to have them set
+`.data.alert` as well.
+
+```
+!ssh_no_root|control=CIS-5.2.10 framework=CIS severity=high|sshd -T | grep -qi '^permitrootlogin no$'
+!pkg_vulns|control=VULN-1 severity=high interval=86400 timeout=300|/usr/local/libexec/nagios/check_pkg_audit
+!telnet_off|control=CIS-2.2.18 framework=CIS waived_until=2026-12-31 waiver="legacy box, ticket 1234"|/usr/local/libexec/sneck/check_telnet_off
+```
+
+```
+compliance:
+  ssh_no_root:
+    command: sshd -T | grep -qi '^permitrootlogin no$'
+    control: CIS-5.2.10
+    framework: CIS
+    severity: high
+  pkg_vulns:
+    command: /usr/local/libexec/nagios/check_pkg_audit
+    control: VULN-1
+    severity: high
+    interval: 86400
+    timeout: 300
+  telnet_off:
+    command: /usr/local/libexec/sneck/check_telnet_off
+    control: CIS-2.2.18
+    framework: CIS
+    waived_until: 2026-12-31
+    waiver: legacy box, ticket 1234
+```
+
+All options are optional.
+
+- `control` :: The ID of the control it checks. Used in place of the
+  name in `.data.compliance_alertString`. Default :: none
+
+- `framework` :: The framework the control is from, such as CIS or
+  STIG. Ones with a framework also get counts and a score for it under
+  `.data.compliance_frameworks`. Default :: none
+
+- `severity` :: One of low, medium, high, or critical. Only used for
+  reporting. Default :: none
+
+- `interval` :: Minimum seconds between runs. Until it is due again,
+  the last result is reused and marked as cached. A change to the
+  command makes it run right away. 0 runs it every time. Default :: 0
+
+- `timeout` :: Seconds to wait on it. Default :: `check_timeout`
+
+- `waived_until` :: A date as YYYY-MM-DD. Through the end of that day,
+  local time, warning, critical, and unknown count as waived instead.
+  Errored is never waived, as that means the check itself is broken.
+  Default :: none
+
+- `waiver` :: Why it is waived, such as a ticket number. Needs
+  `waived_until`. Default :: none
+
+Restarts can't watch compliance checks.
+
+State for `interval` is kept in the cache file name with `.compliance`
+added, so by default /var/cache/sneck.cache.compliance. It is only used
+if a compliance check has a interval.
 
 ## RESTARTS
 
@@ -343,8 +426,8 @@ restarts:
     timeout: 60
 ```
 
-- `checks` :: Required. The checks to watch. Debug checks can't be
-  watched.
+- `checks` :: Required. The checks to watch. Debug checks and
+  compliance checks can't be watched.
 
 - `threshold` :: How many of the watched checks must fail for it to
   trigger. Default :: 1
@@ -453,6 +536,50 @@ The generated JSON/hash is as below in jpath notation.
 
 - .data.restart_state_error :: Only present if the restart state file
   could not be read or written.
+
+- .data.compliance_ok, .data.compliance_warning,
+  .data.compliance_critical, .data.compliance_unknown,
+  .data.compliance_errored :: Counts of compliance checks, the same as
+  for checks. Waived ones are not included.
+
+- .data.compliance_waived :: Count of compliance checks that were not ok
+  but are waived.
+
+- .data.compliance_alert :: 0/1 for if any compliance check is not ok
+  and not waived.
+
+- .data.compliance_alertString :: The outputs of compliance checks that
+  are warning, critical, or unknown and not waived, each prefixed with
+  the control, or the name if there is none, and the severity, such as
+  `[CIS-5.2.10 high] `.
+
+- .data.compliance_score :: Percent of compliance checks that are ok,
+  leaving out waived ones, to two decimal places. null if there are none
+  to score.
+
+- .data.compliance_frameworks.$framework :: The same counts plus score
+  for compliance checks with that framework.
+
+- .data.compliance_state_error :: Only present if the compliance state
+  file could not be read or written.
+
+For the following `$name` is the name of the compliance check.
+
+- .data.compliance.$name.check, ran, output, exit, error, run_time ::
+  The same as for checks. For a cached result, these are from when it
+  last ran.
+
+- .data.compliance.$name.last_ran :: Time since epoch of when it last
+  started running.
+
+- .data.compliance.$name.cached :: 0/1 for if this is a earlier result
+  reused because of `interval`.
+
+- .data.compliance.$name.waived :: 0/1 for if it is not ok and counted
+  as waived.
+
+- .data.compliance.$name.control, framework, severity, waived_until,
+  waiver :: Only present if set in the config.
 
 For the following `$name` is the name of the check ran.
 

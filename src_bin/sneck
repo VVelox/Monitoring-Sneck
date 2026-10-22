@@ -50,6 +50,11 @@ is also created. By default it is
 /var/cache/sneck.cache.snmp and always holds
 the GZip+BASE64 compressed version.
 
+Compliance check state, used for interval, is kept in the cache file
+name with '.compliance' added, so by default
+/var/cache/sneck.cache.compliance. It is only used if a compliance
+check has a interval.
+
 =head2 -u
 
 Update the cache file. Will also print the was written to it.
@@ -302,6 +307,7 @@ my $sneck = Monitoring::Sneck->new(
 		debug      => $debug,
 		restart    => $restart,
 		state_file => $cache_file . '.restarts',
+		compliance_state_file => $cache_file . '.compliance',
 		check_timeout        => $check_timeout,
 		check_timeout_signal => $check_timeout_signal,
 		check_kill_sub_pids  => $kill_sub_pids ? 1 : $no_kill_sub_pids ? 0 : undef,

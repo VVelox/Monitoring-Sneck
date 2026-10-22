@@ -7,6 +7,9 @@ Revision history for Monitoring-Sneck
           options, plus -T, -s, -k, and -K for them
         - checks now time out after 30 seconds by default
         - checks no longer wait on their output pipes once they exit
+        - add compliance checks, via ! lines or compliance in YAML, with
+          separate counts and alert, scores, waivers, and intervals
+        - add compliance_alert option
 
 1.5.0   2026-10-09/13:00
         - signal deaths now exit as 128 + signal and count as errored

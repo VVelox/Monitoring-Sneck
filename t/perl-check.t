@@ -56,6 +56,13 @@ is_deeply(
     'bad perl checks'
 );
 is_deeply( errors_of("a|/usr/bin/perl:x\n"), [], 'only perl: at the start is a perl check' );
+is_deeply(
+    errors_of("a|/bin/true\n\@b|checks=a|perl:file_age -f /tmp/x\n\@c|checks=a|/usr/sbin/service perl:x restart\n"),
+    [ 'line 2: restart "b" can not be a perl check' ],
+    'restarts can not be perl checks'
+);
+is_deeply( errors_of("a|perl:file_age -f /tmp/x\n\@b|checks=a|/usr/sbin/service httpd restart\n"),
+    [], 'restarts may watch perl checks' );
 
 #
 # running them

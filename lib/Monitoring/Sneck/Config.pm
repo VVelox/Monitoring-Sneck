@@ -382,7 +382,9 @@ check_kill_sub_pids do not apply.
 Monitoring::Sneck::Checks is optional and only loaded once a perl check
 is run.
 
-Restarts can not be perl checks.
+Restarts can not be perl checks, as they are commands to run, not
+checks. A restart command starting with perl: is a error. Restarts may
+watch perl checks though, and check_restart reruns them in process.
 
 =head1 RESTARTS
 
@@ -390,6 +392,8 @@ A restart is a command that is run when enough of the checks it watches
 fail. Restarts only run when asked for, via the restart option of
 L<Monitoring::Sneck> or B<-r> for sneck. Otherwise they are just
 reported.
+
+The command can not be a perl check. See PERL CHECKS.
 
 Options are as below.
 
@@ -1599,6 +1603,8 @@ sub _add_restart {
 		$command =~ s/^[\ \t]*//;
 		if ( $command =~ /^\s*$/ ) {
 			$self->_add_problem( 'errors', $location, $label . ' has no command' );
+		} elsif ( $command =~ /^perl:/ ) {
+			$self->_add_problem( 'errors', $location, $label . ' can not be a perl check' );
 		}
 	}
 

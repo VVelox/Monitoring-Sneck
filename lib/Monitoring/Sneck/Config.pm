@@ -66,6 +66,9 @@ COMPLIANCE.
 
 Commands may not be empty.
 
+Checks, debug checks, and compliance checks starting with perl: are
+perl checks, run in process. See PERL CHECKS.
+
 Environment variables are only set if the whole config is valid.
 
 =head2 SNECK FORMAT
@@ -347,6 +350,39 @@ cache file name with '.compliance' added, so by default
         framework: CIS
         waived_until: 2026-12-31
         waiver: legacy box, ticket 1234
+
+=head1 PERL CHECKS
+
+A check, debug check, or compliance check in the form
+'perl:$name $args' runs the check $name from L<Monitoring::Sneck::Checks>
+inside of sneck, instead of starting a program for it. Each is a
+module, such as L<Monitoring::Sneck::Checks::http>, whose POD lists its
+args.
+
+    www|perl:http -H www.example.org -S -w 1 -c 2
+    www_cert|perl:https_cert -H www.example.org -w 30 -c 14
+    !hosts_file|control=LOCAL-1|perl:hosts -e db.example.org=%DB_IP%
+
+Variables are put in place first, then the args are split as a shell
+would, so quote args with spaces in them.
+
+The name must be a-z, 0-9, and _, starting with a letter, which is
+checked along with the args having balanced quotes when the config is
+read. Whether the check is there is only known when it is run.
+
+The exit is what the check returns, as for any other command, with two
+differences. A exit of -1, which is errored, means the check, or
+Monitoring::Sneck::Checks, could not be loaded, such as it not being
+installed or the name being base. Running past check_timeout, or the
+timeout of a compliance check, is UNKNOWN, a exit of 3, as nothing is
+forked to be killed. Each check passes the timeout on to what it talks
+to the network through, so this is rare. check_timeout_signal and
+check_kill_sub_pids do not apply.
+
+Monitoring::Sneck::Checks is optional and only loaded once a perl check
+is run.
+
+Restarts can not be perl checks.
 
 =head1 RESTARTS
 
@@ -1361,9 +1397,59 @@ sub _add_command {
 		return 0;
 	}
 
+	my $perl_problem = $self->_perl_check_problem($command);
+	if ( defined($perl_problem) ) {
+		$self->_add_problem( 'errors', $location, $self->_type_label($type) . ' "' . $name . '" ' . $perl_problem );
+		return 0;
+	}
+
 	$self->{$type}{$name} = $command;
 	return 1;
 } ## end sub _add_command
+
+# Checks a command for problems as a perl check, see PERL CHECKS. Used by
+# _add_command and _add_compliance. Commands not starting with perl: are
+# not perl checks and are fine.
+#
+# Args...
+#
+#     - command :: The command, with leading spaces and tabs removed.
+#
+# Returns undef if it is fine, else what is wrong, to follow the label of
+# what it is for.
+#
+# Example...
+#
+#     $self->_perl_check_problem('perl:http -H www.example.org');
+#     # undef
+#
+#     $self->_perl_check_problem('perl:../http');
+#     # 'has a perl check name that is not valid, it must be a-z, 0-9, and _, starting with a letter'
+#
+#     $self->_perl_check_problem(q{perl:http -s 'Welcome});
+#     # 'has unbalanced quotes in its perl check args'
+sub _perl_check_problem {
+	my ( $self, $command ) = @_;
+
+	if ( $command !~ /^perl:/ ) {
+		return undef;
+	}
+	my ( $check_name, $arg_string ) = $command =~ /^perl:(\S*)\s*(.*)$/s;
+	if ( $check_name !~ /^[a-z][a-z0-9_]*$/ ) {
+		return 'has a perl check name that is not valid, it must be a-z, 0-9, and _, starting with a letter';
+	}
+
+	# eat unquoted runs, escaped characters, and whole quoted parts, until something does not close
+	my $balanced_to = 0;
+	while ( $arg_string =~ /\G(?:[^'"\\]+|\\.|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gcs ) {
+		$balanced_to = pos($arg_string);
+	}
+	if ( $balanced_to != length($arg_string) ) {
+		return 'has unbalanced quotes in its perl check args';
+	}
+
+	return undef;
+} ## end sub _perl_check_problem
 
 # Validates and adds a restart. Leading spaces and tabs are removed from
 # the command first. Used by both parsers. Records a error for every
@@ -1664,6 +1750,10 @@ sub _add_compliance {
 		$command =~ s/^[\ \t]*//;
 		if ( $command =~ /^\s*$/ ) {
 			$self->_add_problem( 'errors', $location, $label . ' has no command' );
+		}
+		my $perl_problem = $self->_perl_check_problem($command);
+		if ( defined($perl_problem) ) {
+			$self->_add_problem( 'errors', $location, $label . ' ' . $perl_problem );
 		}
 	}
 

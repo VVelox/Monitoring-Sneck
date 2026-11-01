@@ -153,7 +153,9 @@ For below '$name' is the name of the check in question.
 
     - $hash{data}{checks}{$name}{exit} :: The exit code. If it died on a
       signal, this is 128 plus the signal number. If it could not be
-      executed or timed out, this is -1.
+      executed or timed out, this is -1. For a perl check, -1 is it
+      not being able to be loaded and timing out is 3, see PERL CHECKS
+      in L<Monitoring::Sneck::Config>.
 
     - $hash{data}{checks}{$name}{error} :: Only present if it died on a
       signal, timed out, or could not be executed. Provides a brief
@@ -546,7 +548,8 @@ sub run {
 #
 # It is run via _run_command using check_timeout, unless a timeout is given,
 # check_timeout_signal, and check_kill_sub_pids. A timeout gives a exit of
-# -1 and a error.
+# -1 and a error. A command starting with perl: is run via _run_perl_check
+# instead, with the same timeout.
 #
 # Args...
 #
@@ -597,8 +600,13 @@ sub _run_check {
 		warn( $name . ' check string post variable replacement: "' . $check . '"' );
 	}
 
-	my $command_result = $self->_run_command( $check, $timeout, $self->{check_timeout_signal},
-		$self->{check_kill_sub_pids} );
+	my $command_result;
+	if ( $check =~ /^perl:/ ) {
+		$command_result = $self->_run_perl_check( $check, $timeout );
+	} else {
+		$command_result = $self->_run_command( $check, $timeout, $self->{check_timeout_signal},
+			$self->{check_kill_sub_pids} );
+	}
 	if ( $self->{debug} ) {
 		warn( $name . ' command done... output is... "' . $command_result->{output} . '"' );
 	}
@@ -1349,6 +1357,67 @@ sub _run_command {
 
 	return \%result;
 } ## end sub _run_command
+
+# Runs a perl check, a command in the form 'perl:$name $args', in process
+# via Monitoring::Sneck::Checks, and returns the same as _run_command does,
+# so _run_check can handle both alike. Monitoring::Sneck::Checks is only
+# loaded the first time one is run, so it is only needed if used. Used by
+# _run_check.
+#
+# The args are handed over as is, for Getopt::Long to split. Unbalanced
+# quotes are UNKNOWN, a exit of 3. The check is given the timeout and is
+# also UNKNOWN if it runs past it.
+#
+# Args...
+#
+#     - command :: The command, after variable substitution, such as
+#       'perl:http -H www.example.org -w 1 -c 2'.
+#
+#     - timeout :: Seconds to give it.
+#
+# Returns a hash ref as below.
+#
+#     - output :: The combined stdout and stderr of the check, with the
+#       final newline removed.
+#
+#     - exit :: The code the check returned, 0 to 3, or -1 if it, or
+#       Monitoring::Sneck::Checks, could not be loaded.
+#
+#     - error :: Only present for a exit of -1. Says why.
+#
+#     - wait_status :: Always undef, as nothing was forked.
+#
+# Example...
+#
+#     my $result = $self->_run_perl_check( 'perl:file_age -f /var/backups/db.sql.gz -w 90000 -c 180000', 30 );
+#     # $result is { output => 'FILE_AGE OK - /var/backups/db.sql.gz is 3600 seconds old...', exit => 0, wait_status => undef }
+#
+#     my $result = $self->_run_perl_check( 'perl:base', 30 );
+#     # $result is { output => 'base is what checks are built on, not a check', exit => -1,
+#     #              error => 'failed to load perl check base', wait_status => undef }
+sub _run_perl_check {
+	my ( $self, $command, $timeout ) = @_;
+
+	my %result = ( output => '', exit => -1, wait_status => undef );
+	my ( $check_name, $arg_string ) = $command =~ /^perl:(\S*)\s*(.*)$/s;
+
+	if ( !eval { require Monitoring::Sneck::Checks; 1 } ) {
+		$result{output} = $@;
+		$result{error}  = 'failed to load Monitoring::Sneck::Checks';
+		chomp( $result{output} );
+		return \%result;
+	}
+
+	my $returned = Monitoring::Sneck::Checks->run( check => $check_name, args => $arg_string, timeout => $timeout );
+	$result{output} = $returned->{combined};
+	$result{exit}   = $returned->{code};
+	chomp( $result{output} );
+	if ( $result{exit} == -1 ) {
+		$result{error} = 'failed to load perl check ' . $check_name;
+	}
+
+	return \%result;
+} ## end sub _run_perl_check
 
 # Sends a signal to every process below a PID, deepest first, so a process
 # is signaled before its parent and is not orphaned out of reach. Children

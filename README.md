@@ -678,6 +678,16 @@ pkg install p5-YAML-LibYAML
 apt-get install libyaml-libyaml-perl
 ```
 
+### Perl Checks
+
+For perl: checks, run in process instead of as a program, also install
+[Monitoring::Sneck::Checks](https://github.com/VVelox/Monitoring-Sneck-Checks).
+See PERL CHECKS in Monitoring::Sneck::Config.
+
+```
+www|perl:http -H www.example.org -S -w 1 -c 2
+```
+
 ### From Src
 
 ```

@@ -33,10 +33,10 @@ our $VERSION = '1.7.0';
 
     my $sneck=Monitoring::Sneck->new({config=>$file});
 
-=head1 USAGE
+=head1 DESCRIPTION
 
-Not really meant to be used as a library. The library is more of
-to support the script.
+This is not really meant to be used as a library. It exists to
+support the sneck script.
 
 =head1 CONFIG FORMAT
 
@@ -71,188 +71,188 @@ longer polling time for LibreNMS or the like when it queries it.
 
 The data section of the return hash is as below.
 
-    - $hash{data}{alert} :: 0/1 boolean for if there is a aloert or not.
+- $hash{data}{alert} :: 0/1 boolean for if there is a alert or not.
 
-    - $hash{data}{ok} :: Count of the number of ok checks.
+- $hash{data}{ok} :: Count of the number of ok checks.
 
-    - $hash{data}{warning} :: Count of the number of warning checks.
+- $hash{data}{warning} :: Count of the number of warning checks.
 
-    - $hash{data}{critical} :: Count of the number of critical checks.
+- $hash{data}{critical} :: Count of the number of critical checks.
 
-    - $hash{data}{unknown} :: Count of the number of unkown checks.
+- $hash{data}{unknown} :: Count of the number of unknown checks.
 
-    - $hash{data}{errored} :: Count of the number of errored checks.
+- $hash{data}{errored} :: Count of the number of errored checks.
 
-    - $hash{data}{alertString} :: The cumulative outputs of anything
-      that returned a warning, critical, or unknown.
+- $hash{data}{alertString} :: The cumulative outputs of anything
+that returned a warning, critical, or unknown.
 
-    - $hash{data}{vars} :: A hash with the variables to use.
+- $hash{data}{vars} :: A hash with the variables to use.
 
-    - $hash{data}{time} :: Time since epoch.
+- $hash{data}{time} :: Time since epoch.
 
-    - $hash{data}{hostname} :: The hostname the check was ran on.
+- $hash{data}{hostname} :: The hostname the check was ran on.
 
-    - $hash{data}{config} :: The raw config file if told to include it.
+- $hash{data}{config} :: The raw config file if told to include it.
 
-    - $hash{data}{run_time} :: How long it took to run all checks.
+- $hash{data}{run_time} :: How long it took to run all checks.
 
-    - $hash{data}{restarted} :: Count of the number of restarts ran.
+- $hash{data}{restarted} :: Count of the number of restarts ran.
 
-    - $hash{data}{restart_state_error} :: Only present if the restart
-      state file could not be read or written. Restarts still run if it
-      can't be read, as if there was no state.
+- $hash{data}{restart_state_error} :: Only present if the restart
+state file could not be read or written. Restarts still run if it
+can't be read, as if there was no state.
 
-    - $hash{data}{compliance_ok} :: Count of ok compliance checks.
+- $hash{data}{compliance_ok} :: Count of ok compliance checks.
 
-    - $hash{data}{compliance_warning} :: Count of warning compliance
-      checks.
+- $hash{data}{compliance_warning} :: Count of warning compliance
+checks.
 
-    - $hash{data}{compliance_critical} :: Count of critical compliance
-      checks.
+- $hash{data}{compliance_critical} :: Count of critical compliance
+checks.
 
-    - $hash{data}{compliance_unknown} :: Count of unknown compliance
-      checks.
+- $hash{data}{compliance_unknown} :: Count of unknown compliance
+checks.
 
-    - $hash{data}{compliance_errored} :: Count of errored compliance
-      checks.
+- $hash{data}{compliance_errored} :: Count of errored compliance
+checks.
 
-    - $hash{data}{compliance_waived} :: Count of compliance checks that
-      were not ok but are waived. These are not counted anywhere else.
+- $hash{data}{compliance_waived} :: Count of compliance checks that
+were not ok but are waived. These are not counted anywhere else.
 
-    - $hash{data}{compliance_alert} :: 0/1 for if any compliance check
-      is not ok and not waived. Only sets alert as well if the
-      compliance_alert option is set.
+- $hash{data}{compliance_alert} :: 0/1 for if any compliance check
+is not ok and not waived. Only sets alert as well if the
+compliance_alert option is set.
 
-    - $hash{data}{compliance_alertString} :: The outputs of compliance
-      checks that are warning, critical, or unknown and not waived. Each
-      is prefixed with the control, or the name if there is none, and
-      the severity, such as '[CIS-5.2.10 high] '. Added to alertString
-      if the compliance_alert option is set.
+- $hash{data}{compliance_alertString} :: The outputs of compliance
+checks that are warning, critical, or unknown and not waived. Each
+is prefixed with the control, or the name if there is none, and
+the severity, such as '[CIS-5.2.10 high] '. Added to alertString
+if the compliance_alert option is set.
 
-    - $hash{data}{compliance_score} :: Percent of compliance checks that
-      are ok, leaving out waived ones, to two decimal places. undef if
-      there are none to score.
+- $hash{data}{compliance_score} :: Percent of compliance checks that
+are ok, leaving out waived ones, to two decimal places. undef if
+there are none to score.
 
-    - $hash{data}{compliance_frameworks}{$framework} :: The same counts
-      as above for compliance checks with that framework, as ok,
-      warning, critical, unknown, errored, waived, and score.
+- $hash{data}{compliance_frameworks}{$framework} :: The same counts
+as above for compliance checks with that framework, as ok,
+warning, critical, unknown, errored, waived, and score.
 
-    - $hash{data}{compliance_state_error} :: Only present if the
-      compliance state file could not be read or written. Compliance
-      checks are run as if there was no state.
+- $hash{data}{compliance_state_error} :: Only present if the
+compliance state file could not be read or written. Compliance
+checks are run as if there was no state.
 
 For below '$name' is the name of the check in question.
 
-    - $hash{data}{checks}{$name} :: A hash with info on the checks ran.
+- $hash{data}{checks}{$name} :: A hash with info on the checks ran.
 
-    - $hash{data}{checks}{$name}{check} :: The command pre-variable substitution.
+- $hash{data}{checks}{$name}{check} :: The command pre-variable substitution.
 
-    - $hash{data}{checks}{$name}{ran} :: The command ran.
+- $hash{data}{checks}{$name}{ran} :: The command ran.
 
-    - $hash{data}{checks}{$name}{output} :: The output of the check.
+- $hash{data}{checks}{$name}{output} :: The output of the check.
 
-    - $hash{data}{checks}{$name}{exit} :: The exit code. If it died on a
-      signal, this is 128 plus the signal number. If it could not be
-      executed or timed out, this is -1. For a perl check, -1 is it
-      not being able to be loaded and timing out is 3, see PERL CHECKS
-      in L<Monitoring::Sneck::Config>.
+- $hash{data}{checks}{$name}{exit} :: The exit code. If it died on a
+signal, this is 128 plus the signal number. If it could not be
+executed or timed out, this is -1. For a perl check, -1 is it
+not being able to be loaded and timing out is 3, see PERL CHECKS
+in L<Monitoring::Sneck::Config>.
 
-    - $hash{data}{checks}{$name}{error} :: Only present if it died on a
-      signal, timed out, or could not be executed. Provides a brief
-      description.
+- $hash{data}{checks}{$name}{error} :: Only present if it died on a
+signal, timed out, or could not be executed. Provides a brief
+description.
 
-    - $hash{data}{checks}{$name}{run_time} :: How long it took to run the checks.
+- $hash{data}{checks}{$name}{run_time} :: How long it took to run the checks.
 
-    - $hash{data}{checks}{$name}{rechecked_by} :: Only present if it was
-      rerun after a restart with check_restart set. The name of that
-      restart. The rest of the results are from the rerun.
+- $hash{data}{checks}{$name}{rechecked_by} :: Only present if it was
+rerun after a restart with check_restart set. The name of that
+restart. The rest of the results are from the rerun.
 
 For below '$name' is the name of the debug checks in question. Debug
 checks are run the same as checks, including check_timeout,
 check_timeout_signal, and check_kill_sub_pids.
 
-    - $hash{data}{debugs}{$name} :: A hash with info on the checks ran.
+- $hash{data}{debugs}{$name} :: A hash with info on the checks ran.
 
-    - $hash{data}{debugs}{$name}{check} :: The command pre-variable substitution.
+- $hash{data}{debugs}{$name}{check} :: The command pre-variable substitution.
 
-    - $hash{data}{debugs}{$name}{ran} :: The command ran.
+- $hash{data}{debugs}{$name}{ran} :: The command ran.
 
-    - $hash{data}{debugs}{$name}{output} :: The output of the check.
+- $hash{data}{debugs}{$name}{output} :: The output of the check.
 
-    - $hash{data}{debugs}{$name}{exit} :: The exit code. Same as for checks.
+- $hash{data}{debugs}{$name}{exit} :: The exit code. Same as for checks.
 
-    - $hash{data}{debugs}{$name}{error} :: Only present if it died on a
-      signal, timed out, or could not be executed. Provides a brief
-      description.
+- $hash{data}{debugs}{$name}{error} :: Only present if it died on a
+signal, timed out, or could not be executed. Provides a brief
+description.
 
-    - $hash{data}{debugs}{$name}{run_time} :: How long it took to run the debug.
+- $hash{data}{debugs}{$name}{run_time} :: How long it took to run the debug.
 
 For below '$name' is the name of the compliance check in question. They
 are run the same as checks, except timeout may override check_timeout.
 See COMPLIANCE in L<Monitoring::Sneck::Config>.
 
-    - $hash{data}{compliance}{$name}{check}, ran, output, exit, error,
-      run_time :: The same as for checks. For a cached result, these are
-      from when it last ran.
+- $hash{data}{compliance}{$name}{check}, ran, output, exit, error,
+run_time :: The same as for checks. For a cached result, these are
+from when it last ran.
 
-    - $hash{data}{compliance}{$name}{last_ran} :: Time since epoch of
-      when it last started running.
+- $hash{data}{compliance}{$name}{last_ran} :: Time since epoch of
+when it last started running.
 
-    - $hash{data}{compliance}{$name}{cached} :: 0/1 for if this is a
-      earlier result reused because of interval.
+- $hash{data}{compliance}{$name}{cached} :: 0/1 for if this is a
+earlier result reused because of interval.
 
-    - $hash{data}{compliance}{$name}{waived} :: 0/1 for if it is not ok
-      and counted as waived. Errored is never waived.
+- $hash{data}{compliance}{$name}{waived} :: 0/1 for if it is not ok
+and counted as waived. Errored is never waived.
 
-    - $hash{data}{compliance}{$name}{control}, framework, severity,
-      waived_until, waiver :: Only present if set in the config.
+- $hash{data}{compliance}{$name}{control}, framework, severity,
+waived_until, waiver :: Only present if set in the config.
 
 For below '$name' is the name of the restart in question. Every restart
 in the config has a entry, even when restarts are disabled.
 
-    - $hash{data}{restarts}{$name}{triggered} :: 0/1 for if enough of its
-      checks failed to meet its threshold.
+- $hash{data}{restarts}{$name}{triggered} :: 0/1 for if enough of its
+checks failed to meet its threshold.
 
-    - $hash{data}{restarts}{$name}{ran} :: 0/1 for if it ran.
+- $hash{data}{restarts}{$name}{ran} :: 0/1 for if it ran.
 
-    - $hash{data}{restarts}{$name}{reason} :: Why it did or did not run.
-      One of 'threshold', 'cascade from $depend', 'cooldown, $N seconds
-      left', 'max retries reached', 'skipped, dependency $depend failed',
-      'maintenance window', 'not triggered', or 'restarts disabled'.
+- $hash{data}{restarts}{$name}{reason} :: Why it did or did not run.
+One of 'threshold', 'cascade from $depend', 'cooldown, $N seconds
+left', 'max retries reached', 'skipped, dependency $depend failed',
+'maintenance window', 'not triggered', or 'restarts disabled'.
 
-    - $hash{data}{restarts}{$name}{failed_checks} :: Array of the watched
-      checks that counted as failed.
+- $hash{data}{restarts}{$name}{failed_checks} :: Array of the watched
+checks that counted as failed.
 
-    - $hash{data}{restarts}{$name}{threshold} :: The threshold.
+- $hash{data}{restarts}{$name}{threshold} :: The threshold.
 
-    - $hash{data}{restarts}{$name}{attempts} :: Runs for its threshold
-      since its checks last recovered.
+- $hash{data}{restarts}{$name}{attempts} :: Runs for its threshold
+since its checks last recovered.
 
-    - $hash{data}{restarts}{$name}{command} :: The command pre-variable
-      substitution.
+- $hash{data}{restarts}{$name}{command} :: The command pre-variable
+substitution.
 
 The rest are only present if it ran.
 
-    - $hash{data}{restarts}{$name}{ran_command} :: The command ran.
+- $hash{data}{restarts}{$name}{ran_command} :: The command ran.
 
-    - $hash{data}{restarts}{$name}{output} :: The output of the command.
+- $hash{data}{restarts}{$name}{output} :: The output of the command.
 
-    - $hash{data}{restarts}{$name}{exit} :: The exit code. Same as for
-      checks, plus -1 if it timed out.
+- $hash{data}{restarts}{$name}{exit} :: The exit code. Same as for
+checks.
 
-    - $hash{data}{restarts}{$name}{error} :: Only present if it timed
-      out, died on a signal, or could not be executed. If it timed out
-      and timeout_signal is set, also says the signal was sent, plus
-      any problems sending it. Also present if check_restart is set,
-      the command exited 0, and its checks still met the threshold
-      afterwards.
+- $hash{data}{restarts}{$name}{error} :: Only present if it timed
+out, died on a signal, or could not be executed. If it timed out
+and timeout_signal is set, also says the signal was sent, plus
+any problems sending it. Also present if check_restart is set and its
+checks still met the threshold afterwards, unless one of the
+above already set it.
 
-    - $hash{data}{restarts}{$name}{run_time} :: How long the command
-      took to run, not counting check_restart.
+- $hash{data}{restarts}{$name}{run_time} :: How long the command
+took to run, not counting check_restart.
 
-    - $hash{data}{restarts}{$name}{recheck_failed_checks} :: Only present
-      if check_restart is set. Array of the watched checks that still
-      counted as failed when rerun.
+- $hash{data}{restarts}{$name}{recheck_failed_checks} :: Only present
+if check_restart is set. Array of the watched checks that still
+counted as failed when rerun.
 
 A restart that ran and failed, including timing out or its checks still
 failing with check_restart, sets alert and adds a line to alertString
@@ -1738,15 +1738,11 @@ Please report any bugs or feature requests to C<bug-monitoring-sneck at rt.cpan.
 the web interface at L<https://rt.cpan.org/NoAuth/ReportBug.html?Queue=Monitoring-Sneck>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
 
-
-
-
 =head1 SUPPORT
 
 You can find documentation for this module with the perldoc command.
 
     perldoc Monitoring::Sneck
-
 
 You can also look for information at:
 
@@ -1762,13 +1758,9 @@ L<https://metacpan.org/release/Monitoring-Sneck>
 
 =item * Github
 
-l<https://github.com/VVelox/Monitoring-Sneck>
+L<https://github.com/VVelox/Monitoring-Sneck>
 
 =back
-
-
-=head1 ACKNOWLEDGEMENTS
-
 
 =head1 LICENSE AND COPYRIGHT
 
@@ -1777,7 +1769,6 @@ This software is Copyright (c) 2023 by Zane C. Bowers-Hadley.
 This is free software, licensed under:
 
   The Artistic License 2.0 (GPL Compatible)
-
 
 =cut
 

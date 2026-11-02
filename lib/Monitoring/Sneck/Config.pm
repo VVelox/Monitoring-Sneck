@@ -46,8 +46,9 @@ can be overridden via the format arg to new.
 
 The following applies to both.
 
-Names of variables, environment variables, checks, debug checks,
-compliance checks, and restarts are made up of A-Z, a-z, 0-9, and _.
+Names of options, variables, environment variables, checks, debug
+checks, compliance checks, and restarts are made up of A-Z, a-z, 0-9,
+and _.
 
 Variables are used in commands in the form /%+variable_name%+/. A
 reference to a variable that is not defined is left as written and
@@ -173,21 +174,21 @@ config is used.
 The top level is a mapping with up to seven keys, each of which is a
 mapping of names to values.
 
-    - options :: Options. See OPTIONS.
+- options :: Options. See OPTIONS.
 
-    - env :: Environment variables to set. Set in sorted name order.
+- env :: Environment variables to set. Set in sorted name order.
 
-    - vars :: Variables.
+- vars :: Variables.
 
-    - checks :: Checks, with the command as the value.
+- checks :: Checks, with the command as the value.
 
-    - debugs :: Debug checks, with the command as the value.
+- debugs :: Debug checks, with the command as the value.
 
-    - compliance :: Compliance checks. Each is a mapping of options plus
-      command. See COMPLIANCE.
+- compliance :: Compliance checks. Each is a mapping of options plus
+command. See COMPLIANCE.
 
-    - restarts :: Restarts. Each is a mapping of options plus command.
-      See RESTARTS.
+- restarts :: Restarts. Each is a mapping of options plus command.
+See RESTARTS.
 
 Any other top level key is an error. Any section may be left out or
 empty. An empty file is a valid config with nothing in it.
@@ -228,38 +229,38 @@ Options are settings for sneck itself. Options given on the command
 line override these. cache_file, pid_dir, and locking are only used by
 sneck, not L<Monitoring::Sneck>.
 
-    - cache_file :: The cache file. The same as B<-C> for sneck.
-      May not be empty.
+- cache_file :: The cache file. The same as B<-C> for sneck.
+May not be empty.
 
-    - pid_dir :: The directory for the PID file used for locking. The
-      same as B<-P> for sneck. May not be empty.
+- pid_dir :: The directory for the PID file used for locking. The
+same as B<-P> for sneck. May not be empty.
 
-    - locking :: If 1, locking is enabled. The same as B<-l> for sneck.
-      B<-L> disables it. Takes true and false in YAML.
+- locking :: If 1, locking is enabled. The same as B<-l> for sneck.
+B<-L> disables it. Takes true and false in YAML.
 
-    - check_timeout :: Seconds to wait on each check, debug check, and
-      compliance check before giving up on it. Compliance checks may
-      override it via their timeout option. Works the same as timeout for restarts.
-      A timeout counts as errored, with a exit of -1. The same as B<-T>
-      for sneck.
-      Default :: 30
+- check_timeout :: Seconds to wait on each check, debug check, and
+compliance check before giving up on it. Compliance checks may
+override it via their timeout option. Works the same as timeout for restarts.
+A timeout counts as errored, with a exit of -1. The same as B<-T>
+for sneck.
+Default :: 30
 
-    - check_timeout_signal :: Signal to send a check, debug check, or
-      compliance check on timeout. Works the same as timeout_signal for restarts. The same
-      as B<-s> for sneck.
-      Default :: none
+- check_timeout_signal :: Signal to send a check, debug check, or
+compliance check on timeout. Works the same as timeout_signal for restarts. The same
+as B<-s> for sneck.
+Default :: none
 
-    - check_kill_sub_pids :: If 1, the timeout signal is also sent to
-      all child processes of the check, debug check, or compliance
-      check. Works the same
-      as kill_sub_pids for restarts. The same as B<-k> for sneck. B<-K>
-      disables it. Takes true and false in YAML.
-      Default :: 1
+- check_kill_sub_pids :: If 1, the timeout signal is also sent to
+all child processes of the check, debug check, or compliance
+check. Works the same
+as kill_sub_pids for restarts. The same as B<-k> for sneck. B<-K>
+disables it. Takes true and false in YAML.
+Default :: 1
 
-    - compliance_alert :: If 1, compliance checks that are not ok and not
-      waived also set alert and are added to alertString, the same as
-      checks. Takes true and false in YAML.
-      Default :: 0
+- compliance_alert :: If 1, compliance checks that are not ok and not
+waived also set alert and are added to alertString, the same as
+checks. Takes true and false in YAML.
+Default :: 0
 
 Any other option is an error.
 
@@ -289,40 +290,40 @@ Restarts can not watch compliance checks.
 
 Options are as below. All are optional.
 
-    - control :: The ID of the control it checks, such as CIS-5.2.10.
-      Used in place of the name in compliance_alertString.
-      Default :: none
+- control :: The ID of the control it checks, such as CIS-5.2.10.
+Used in place of the name in compliance_alertString.
+Default :: none
 
-    - framework :: The framework the control is from, such as CIS or
-      STIG. Compliance checks with a framework also get counts and a
-      score for it under compliance_frameworks.
-      Default :: none
+- framework :: The framework the control is from, such as CIS or
+STIG. Compliance checks with a framework also get counts and a
+score for it under compliance_frameworks.
+Default :: none
 
-    - severity :: One of low, medium, high, or critical, in any case.
-      Only used for reporting. It does not change how the exit code is
-      counted.
-      Default :: none
+- severity :: One of low, medium, high, or critical, in any case.
+Only used for reporting. It does not change how the exit code is
+counted.
+Default :: none
 
-    - interval :: Minimum seconds between runs. Until it is due again,
-      the last result is reused and marked as cached. A change to the
-      command, after variables are put in place, makes it run right
-      away. 0 runs it every time.
-      Default :: 0
+- interval :: Minimum seconds between runs. Until it is due again,
+the last result is reused and marked as cached. A change to the
+command, after variables are put in place, makes it run right
+away. 0 runs it every time.
+Default :: 0
 
-    - timeout :: Seconds to wait on it before giving up on it. Works
-      the same as check_timeout, which is used if this is not set.
-      Default :: check_timeout
+- timeout :: Seconds to wait on it before giving up on it. Works
+the same as check_timeout, which is used if this is not set.
+Default :: check_timeout
 
-    - waived_until :: A date in the form YYYY-MM-DD. Through the end of
-      that day, local time, a warning, critical, or unknown result is
-      counted as waived instead. Errored is never waived, as that means
-      the check itself is broken. Once the date passes, it counts as
-      normal again.
-      Default :: none
+- waived_until :: A date in the form YYYY-MM-DD. Through the end of
+that day, local time, a warning, critical, or unknown result is
+counted as waived instead. Errored is never waived, as that means
+the check itself is broken. Once the date passes, it counts as
+normal again.
+Default :: none
 
-    - waiver :: Why it is waived, such as a ticket number. Needs
-      waived_until.
-      Default :: none
+- waiver :: Why it is waived, such as a ticket number. Needs
+waived_until.
+Default :: none
 
 The state used for interval is kept in a file. For sneck, this is the
 cache file name with '.compliance' added, so by default
@@ -397,80 +398,80 @@ The command can not be a perl check. See PERL CHECKS.
 
 Options are as below.
 
-    - checks :: Required. The checks to watch. Debug checks and
-      compliance checks can not be watched.
+- checks :: Required. The checks to watch. Debug checks and
+compliance checks can not be watched.
 
-    - threshold :: How many of the watched checks must fail for it to
-      trigger. Must be between 1 and the number of checks.
-      Default :: 1
+- threshold :: How many of the watched checks must fail for it to
+trigger. Must be between 1 and the number of checks.
+Default :: 1
 
-    - depends :: Other restarts this one depends on. When both trigger,
-      the ones depended on run first. A depend that did not trigger is
-      assumed to be fine and is not run. If a depend runs and fails,
-      or was itself skipped for that reason, this one is skipped.
-      Dependency cycles are errors.
-      Default :: none
+- depends :: Other restarts this one depends on. When both trigger,
+the ones depended on run first. A depend that did not trigger is
+assumed to be fine and is not run. If a depend runs and fails,
+or was itself skipped for that reason, this one is skipped.
+Dependency cycles are errors.
+Default :: none
 
-    - cascade :: If 1, this also runs when any of its depends ran
-      without failing, even if its own threshold was not met.
-      Default :: 0
+- cascade :: If 1, this also runs when any of its depends ran
+without failing, even if its own threshold was not met.
+Default :: 0
 
-    - ignore_unknown :: If 0, unknown, exit 3, counts as failed.
-      Default :: 1
+- ignore_unknown :: If 0, unknown, exit 3, counts as failed.
+Default :: 1
 
-    - ignore_errored :: If 0, errored counts as failed. This is any
-      exit other than 0 to 3, dying on a signal, or not being able to
-      run the check.
-      Default :: 1
+- ignore_errored :: If 0, errored counts as failed. This is any
+exit other than 0 to 3, dying on a signal, or not being able to
+run the check.
+Default :: 1
 
-    - min_interval :: Minimum seconds from when this restart last
-      finished to when it may run again. 0 turns it off.
-      Default :: 180
+- min_interval :: Minimum seconds from when this restart last
+finished to when it may run again. 0 turns it off.
+Default :: 180
 
-    - max_retries :: How many times in a row it will run for its
-      threshold before giving up until its checks recover. 0 means
-      always retry. Runs from cascade do not count towards this.
-      Default :: 0
+- max_retries :: How many times in a row it will run for its
+threshold before giving up until its checks recover. 0 means
+always retry. Runs from cascade do not count towards this.
+Default :: 0
 
-    - timeout :: Seconds to wait on the command before giving up on it.
-      On timeout its output pipes are closed and it is left running,
-      unless timeout_signal is set. If it writes again it gets SIGPIPE,
-      or whatever it does when the reader goes away. A timeout counts
-      as failed, with a exit of -1.
-      Default :: 30
+- timeout :: Seconds to wait on the command before giving up on it.
+On timeout its output pipes are closed and it is left running,
+unless timeout_signal is set. If it writes again it gets SIGPIPE,
+or whatever it does when the reader goes away. A timeout counts
+as failed, with a exit of -1.
+Default :: 30
 
-    - timeout_signal :: Signal to send the command on timeout, as a
-      name such as TERM or SIGTERM, or a number. 0 is not allowed. It is
-      sent to the PID of the command and it is not waited on afterwards.
-      If the command has shell metacharacters in it, that PID is the
-      /bin/sh running it, so use kill_sub_pids to reach the command.
-      Default :: none
+- timeout_signal :: Signal to send the command on timeout, as a
+name such as TERM or SIGTERM, or a number. 0 is not allowed. It is
+sent to the PID of the command and it is not waited on afterwards.
+If the command has shell metacharacters in it, that PID is the
+/bin/sh running it, so use kill_sub_pids to reach the command.
+Default :: none
 
-    - kill_sub_pids :: If 1, the timeout signal is also sent to all
-      child processes of the command, found via pgrep and signaled via
-      pkill, deepest first. Does nothing without timeout_signal.
-      Default :: 1
+- kill_sub_pids :: If 1, the timeout signal is also sent to all
+child processes of the command, found via pgrep and signaled via
+pkill, deepest first. Does nothing without timeout_signal.
+Default :: 1
 
-    - check_restart :: If 1, its checks are rerun after the command
-      finishes and their results replace the earlier ones in what is
-      returned. If they still meet the threshold, the restart counts
-      as failed, the same as the command failing.
-      Default :: 0
+- check_restart :: If 1, its checks are rerun after the command
+finishes and their results replace the earlier ones in what is
+returned. If they still meet the threshold, the restart counts
+as failed, the same as the command failing.
+Default :: 0
 
-    - check_restart_delay :: Seconds to wait after the command finishes
-      before rerunning its checks. Does nothing without check_restart.
-      Default :: 5
+- check_restart_delay :: Seconds to wait after the command finishes
+before rerunning its checks. Does nothing without check_restart.
+Default :: 5
 
-    - not_every :: A maintenance window, as a five field cron spec of
-      minute, hour, day of month, month, and day of week. While the
-      local time matches it, this restart does not run. Only numbers
-      are allowed, no names such as sat or jan. Sunday is 0 or 7. As
-      with cron, if both day of month and day of week are given, either
-      one matching is enough. Restarts depending on one held back by
-      this treat it as if it did not trigger. In the sneck format it
-      must be quoted. In YAML it must be quoted if it starts with *.
-      Needs L<DateTime::Event::Cron>.
-      Default :: none
+- not_every :: A maintenance window, as a five field cron spec of
+minute, hour, day of month, month, and day of week. While the
+local time matches it, this restart does not run. Only numbers
+are allowed, no names such as sat or jan. Sunday is 0 or 7. As
+with cron, if both day of month and day of week are given, either
+one matching is enough. Restarts depending on one held back by
+this treat it as if it did not trigger. In the sneck format it
+must be quoted. In YAML it must be quoted if it starts with *.
+Matched via L<DateTime::Event::Cron>.
+Default :: none
 
 Critical always counts as failed. Ok and warning never do.
 
@@ -483,21 +484,21 @@ exited, so a daemon started by it holding stdout open is fine.
 The command is also given the environment variables below, describing
 why it is running.
 
-    - SNECK_RESTART :: The name of the restart.
+- SNECK_RESTART :: The name of the restart.
 
-    - SNECK_REASON :: Either 'threshold' or 'cascade'.
+- SNECK_REASON :: Either 'threshold' or 'cascade'.
 
-    - SNECK_CASCADE_FROM :: The depend it cascaded from, or empty.
+- SNECK_CASCADE_FROM :: The depend it cascaded from, or empty.
 
-    - SNECK_FAILED_CHECKS :: Comma separated list of its checks that
-      counted as failed. May be empty for a cascade.
+- SNECK_FAILED_CHECKS :: Comma separated list of its checks that
+counted as failed. May be empty for a cascade.
 
-    - SNECK_CHECKS :: Comma separated list of the checks it watches.
+- SNECK_CHECKS :: Comma separated list of the checks it watches.
 
-    - SNECK_THRESHOLD :: The threshold.
+- SNECK_THRESHOLD :: The threshold.
 
-    - SNECK_ATTEMPTS :: Runs for its threshold since its checks last
-      recovered, this one included.
+- SNECK_ATTEMPTS :: Runs for its threshold since its checks last
+recovered, this one included.
 
     @httpd|checks=http_check,php_check threshold=2 depends=php_fpm cascade=1 timeout=60|/usr/sbin/service apache24 restart
 
@@ -538,14 +539,14 @@ Reads and parses a config.
 
 One argument is taken and that is a hash ref.
 
-    - file :: Path to the config file to read.
+- file :: Path to the config file to read.
 
-    - raw :: The config as a string. Used instead of file if both
-      are given.
+- raw :: The config as a string. Used instead of file if both
+are given.
 
-    - format :: Either 'sneck' or 'yaml'. If not given, a file ending
-      in .yaml or .yml is 'yaml' and anything else, including raw, is
-      'sneck'.
+- format :: Either 'sneck' or 'yaml'. If not given, a file ending
+in .yaml or .yml, in any case, is 'yaml' and anything else,
+including raw, is 'sneck'.
 
 Dies if neither file nor raw is given, the file can not be read, the
 format is unknown, or the format is 'yaml' and YAML::XS can not be
@@ -683,18 +684,18 @@ sub is_valid {
 Returns a list of errors found in the config. Each is a hash ref as
 below.
 
-    - where :: Where the problem is, for printing. For the sneck format
-      this is 'line N'. For YAML this is the path to the problem, such
-      as 'checks.foo', or 'YAML' for a YAML syntax error.
+- where :: Where the problem is, for printing. For the sneck format
+this is 'line N'. For YAML this is the path to the problem, such
+as 'checks.foo', or 'YAML' for a YAML syntax error.
 
-    - line :: The line number, starting at 1. Undef for YAML.
+- line :: The line number, starting at 1. Undef for YAML.
 
-    - path :: The path to the problem, such as 'checks.foo'. Undef for
-      the sneck format.
+- path :: The path to the problem, such as 'checks.foo'. Undef for
+the sneck format.
 
-    - text :: The line as it appears in the file. Undef for YAML.
+- text :: The line as it appears in the file. Undef for YAML.
 
-    - message :: A description of the problem.
+- message :: A description of the problem.
 
 For the sneck format these are in line order. For YAML they are in
 section order, options, env, vars, checks, debugs, compliance, then
@@ -753,12 +754,12 @@ it is not valid. The second is undef if it is valid or a error message.
 
 The standard forms are as below.
 
-    - locking, check_kill_sub_pids, compliance_alert :: 0 or 1.
+- locking, check_kill_sub_pids, compliance_alert :: 0 or 1.
 
-    - check_timeout :: A number.
+- check_timeout :: A number.
 
-    - check_timeout_signal :: The signal name without the SIG prefix,
-      such as TERM. Numbers are turned into names.
+- check_timeout_signal :: The signal name without the SIG prefix,
+such as TERM. Numbers are turned into names.
 
     my ( $signal, $error ) = Monitoring::Sneck::Config->validate_option( 'check_timeout_signal', 'sigterm' );
     # $signal is 'TERM' and $error is undef
@@ -882,23 +883,23 @@ Returns a hash ref of the restarts, with the names as keys. Each value
 is a hash ref with every option filled in, defaults included, as below.
 This is a copy, so changing it does not change the config.
 
-    - command :: The command, before variable substitution.
+- command :: The command, before variable substitution.
 
-    - checks :: Array ref of the names of the checks watched.
+- checks :: Array ref of the names of the checks watched.
 
-    - depends :: Array ref of the names of the restarts depended on.
+- depends :: Array ref of the names of the restarts depended on.
 
-    - threshold, cascade, ignore_unknown, ignore_errored, min_interval,
-      max_retries, timeout, kill_sub_pids, check_restart,
-      check_restart_delay :: As described under
-      RESTARTS. The 0/1 options are always 0 or 1.
+- threshold, cascade, ignore_unknown, ignore_errored, min_interval,
+max_retries, timeout, kill_sub_pids, check_restart,
+check_restart_delay :: As described under
+RESTARTS. The 0/1 options are always 0 or 1.
 
-    - timeout_signal :: The signal name without the SIG prefix, such as
-      TERM, or undef if not set. Numbers are turned into names.
+- timeout_signal :: The signal name without the SIG prefix, such as
+TERM, or undef if not set. Numbers are turned into names.
 
-    - not_every :: The cron spec with surrounding whitespace removed and
-      other runs of whitespace turned into a single space, or undef if
-      not set.
+- not_every :: The cron spec with surrounding whitespace removed and
+other runs of whitespace turned into a single space, or undef if
+not set.
 
     my $threshold = $config->restarts->{httpd}{threshold};
 
@@ -922,17 +923,17 @@ Returns a hash ref of the compliance checks, with the names as keys.
 Each value is a hash ref with every option filled in, as below. This is
 a copy, so changing it does not change the config.
 
-    - command :: The command, before variable substitution.
+- command :: The command, before variable substitution.
 
-    - control, framework, waived_until, waiver :: As described under
-      COMPLIANCE, or undef if not set.
+- control, framework, waived_until, waiver :: As described under
+COMPLIANCE, or undef if not set.
 
-    - severity :: Lower case, or undef if not set.
+- severity :: Lower case, or undef if not set.
 
-    - interval :: As described under COMPLIANCE.
+- interval :: As described under COMPLIANCE.
 
-    - timeout :: As described under COMPLIANCE, or undef if not set, in
-      which case check_timeout is used.
+- timeout :: As described under COMPLIANCE, or undef if not set, in
+which case check_timeout is used.
 
     my $control = $config->compliance->{ssh_no_root}{control};
 

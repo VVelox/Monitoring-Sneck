@@ -19,11 +19,11 @@ Monitoring::Sneck - a boopable LibreNMS JSON style SNMP extend for remotely runn
 
 =head1 VERSION
 
-Version 1.7.0
+Version 1.8.0
 
 =cut
 
-our $VERSION = '1.7.0';
+our $VERSION = '1.8.0';
 
 =head1 SYNOPSIS
 
@@ -84,7 +84,8 @@ The data section of the return hash is as below.
 - $hash{data}{errored} :: Count of the number of errored checks.
 
 - $hash{data}{alertString} :: The cumulative outputs of anything
-that returned a warning, critical, or unknown.
+that returned a warning, critical, or unknown. With the strip_perfdata
+option on, the perfdata is left out of them.
 
 - $hash{data}{vars} :: A hash with the variables to use.
 
@@ -126,7 +127,8 @@ compliance_alert option is set.
 - $hash{data}{compliance_alertString} :: The outputs of compliance
 checks that are warning, critical, or unknown and not waived. Each
 is prefixed with the control, or the name if there is none, and
-the severity, such as '[CIS-5.2.10 high] '. Added to alertString
+the severity, such as '[CIS-5.2.10 high] '. With the strip_perfdata option
+on, the perfdata is left out of them. Added to alertString
 if the compliance_alert option is set.
 
 - $hash{data}{compliance_score} :: Percent of compliance checks that
@@ -167,6 +169,27 @@ description.
 rerun after a restart with check_restart set. The name of that
 restart. The rest of the results are from the rerun.
 
+- $hash{data}{checks}{$name}{perfdata}{$label} :: Only present if the
+perfdata option is on. A hash for each perfdata item in the output,
+keyed by its label, as below. Units and ranges are as given.
+
+  - value :: The number, or undef if it was U.
+
+  - uom :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
+
+  - warning :: The warning range, such as 10, 10:, ~:5, or @5:10.
+  undef if not given.
+
+  - critical :: The critical range, the same as warning.
+
+  - min :: The minimum. undef if not given.
+
+  - max :: The maximum. undef if not given.
+
+- $hash{data}{checks}{$name}{perfdata_error} :: Only present if some of
+the perfdata could not be parsed. Items with a bad value are left out.
+Never changes the exit or counts.
+
 For below '$name' is the name of the debug checks in question. Debug
 checks are run the same as checks, including check_timeout,
 check_timeout_signal, and check_kill_sub_pids.
@@ -187,12 +210,16 @@ description.
 
 - $hash{data}{debugs}{$name}{run_time} :: How long it took to run the debug.
 
+- $hash{data}{debugs}{$name}{perfdata}, perfdata_error :: The same
+as for checks.
+
 For below '$name' is the name of the compliance check in question. They
 are run the same as checks, except timeout may override check_timeout.
 See COMPLIANCE in L<Monitoring::Sneck::Config>.
 
 - $hash{data}{compliance}{$name}{check}, ran, output, exit, error,
-run_time :: The same as for checks. For a cached result, these are
+run_time, perfdata, perfdata_error :: The same as for checks.
+For a cached result, these are
 from when it last ran.
 
 - $hash{data}{compliance}{$name}{last_ran} :: Time since epoch of
@@ -356,6 +383,10 @@ sub new {
 		compliance_state_file => '/var/cache/sneck.cache.compliance',
 		# if compliance checks also set alert and add to alertString
 		compliance_alert => 0,
+		# if check output is parsed for perfdata
+		perfdata => 1,
+		# if perfdata is left out of alertString and compliance_alertString
+		strip_perfdata => 0,
 		# same defaults as timeout, timeout_signal, and kill_sub_pids for restarts
 		check_timeout        => 30,
 		check_timeout_signal => undef,
@@ -411,8 +442,10 @@ sub new {
 
 	# check timeout settings, args over the config over the defaults
 	my $options = $parsed_config->options;
-	if ( defined( $options->{compliance_alert} ) ) {
-		$self->{compliance_alert} = $options->{compliance_alert};
+	foreach my $name ( 'compliance_alert', 'perfdata', 'strip_perfdata' ) {
+		if ( defined( $options->{$name} ) ) {
+			$self->{$name} = $options->{$name};
+		}
 	}
 	my @arg_errors;
 	foreach my $name ( 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids' ) {
@@ -513,6 +546,19 @@ sub run {
 	$self->_run_compliance;
 
 	$self->_handle_restarts;
+
+	# after restarts, so checks rerun by check_restart are what get parsed
+	if ( $self->{perfdata} ) {
+		foreach my $type ( 'checks', 'debugs', 'compliance' ) {
+			foreach my $result ( values( %{ $self->{to_return}{data}{$type} } ) ) {
+				my $parsed = $self->_parse_perfdata( $result->{output} );
+				$result->{perfdata} = $parsed->{perfdata};
+				if ( defined( $parsed->{errors}[0] ) ) {
+					$result->{perfdata_error} = join( '; ', @{ $parsed->{errors} } );
+				}
+			}
+		}
+	}
 
 	$self->_tally_checks;
 
@@ -679,7 +725,11 @@ sub _tally_checks {
 		}
 		# add it to the alert string if it is a warning, critical, or unknown
 		if ( $count ne 'ok' && $count ne 'errored' ) {
-			$data->{alertString} = $data->{alertString} . $data->{checks}{$name}{output} . "\n";
+			my $output = $data->{checks}{$name}{output};
+			if ( $self->{strip_perfdata} ) {
+				$output = $self->_parse_perfdata($output)->{text};
+			}
+			$data->{alertString} = $data->{alertString} . $output . "\n";
 		}
 	} ## end foreach my $name ( sort( keys( %{ $data->{checks} } ) ) )
 
@@ -690,6 +740,115 @@ sub _tally_checks {
 
 	return;
 } ## end sub _tally_checks
+
+# Splits nagios plugin output into its text and its perfdata. Used by run to
+# add perfdata to results and by _tally_checks and _tally_compliance to
+# leave perfdata out of the alert strings when strip_perfdata is set.
+#
+# Perfdata is anything after the first | on the first line, plus everything
+# after the first | found on any later line, through to the end. Items are
+# space separated, as 'label'=value[uom];[warn];[crit];[min];[max]. A label
+# may be in single quotes to hold spaces or =, with '' for a literal quote.
+#
+# Args...
+#
+#     - output :: The output of the check. undef is treated as ''.
+#
+# Returns a hash ref of...
+#
+#     - text :: The output with the perfdata removed, as well as spaces left
+#       before the | on each line.
+#
+#     - perfdata :: Hash ref of labels to hash refs of value, uom, warning,
+#       critical, min, and max. value is a number, or undef for U. uom is the
+#       unit as given, or ''. warning and critical are the range strings as
+#       given, such as 10:, ~:5, or @5:10. min and max are numbers. Any of
+#       warning, critical, min, or max not given are undef.
+#
+#     - errors :: Array ref of problems found. Items with a bad value are
+#       left out. A repeated label replaces the earlier one.
+#
+# Example...
+#
+#     my $parsed = $self->_parse_perfdata("HTTP OK - 200 | time=0.5s;1;2;0 'page size'=512B");
+#     # $parsed is { text => 'HTTP OK - 200', errors => [], perfdata => {
+#     #     time => { value => 0.5, uom => 's', warning => '1', critical => '2', min => 0, max => undef },
+#     #     'page size' => { value => 512, uom => 'B', warning => undef, critical => undef, min => undef, max => undef } } }
+sub _parse_perfdata {
+	my ( $self, $output ) = @_;
+
+	my @text_lines;
+	my @perf_strings;
+	my $in_perf = 0;
+	foreach my $line ( split( /\n/, $output // '' ) ) {
+		if ($in_perf) {
+			push( @perf_strings, $line );
+			next;
+		}
+		my ( $text, $perf ) = split( /\|/, $line, 2 );
+		$text //= '';
+		$text =~ s/\s+\z// if defined($perf);
+		push( @text_lines, $text );
+		next if !defined($perf);
+		push( @perf_strings, $perf );
+		# the first line's perfdata stands alone, but after that it runs to the end
+		$in_perf = 1 if defined( $text_lines[1] );
+	} ## end foreach my $line ( split( /\n/, $output // '' ) )
+
+	my $number = qr/-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?/;
+	my %perfdata;
+	my @errors;
+	# an item is a run of non-spaces, where quoted bits may also hold spaces
+	my @items = join( ' ', @perf_strings ) =~ /((?:'(?:[^']|'')*'|[^\s'])+)/g;
+	foreach my $item (@items) {
+		# the label is either quoted or everything up to the first =
+		my ( $label, $fields ) = $item =~ /\A('(?:[^']|'')*'|[^=]+)=(.*)\z/;
+		if ( !defined($label) ) {
+			push( @errors, 'no label=value in "' . $item . '"' );
+			next;
+		}
+		if ( $label =~ s/\A'(.*)'\z/$1/ ) {
+			$label =~ s/''/'/g;
+		}
+
+		my ( $value_and_uom, $warning, $critical, $min, $max ) = split( /;/, $fields );
+		my ( $value, $uom ) = ( $value_and_uom // '' ) =~ /\A($number|U)(.*)\z/;
+		if ( !defined($value) ) {
+			push( @errors, 'bad value for "' . $label . '"' );
+			next;
+		}
+		if ( defined( $perfdata{$label} ) ) {
+			push( @errors, 'label "' . $label . '" repeated' );
+		}
+
+		my %parsed = (
+			value    => $value eq 'U' ? undef : $value + 0,
+			uom      => $uom,
+			warning  => $warning,
+			critical => $critical,
+			min      => $min,
+			max      => $max,
+		);
+		foreach my $field ( 'warning', 'critical', 'min', 'max' ) {
+			if ( defined( $parsed{$field} ) && $parsed{$field} eq '' ) {
+				$parsed{$field} = undef;
+			}
+		}
+		# min and max are plain numbers, unlike the ranges
+		foreach my $limit ( 'min', 'max' ) {
+			next if !defined( $parsed{$limit} );
+			if ( $parsed{$limit} =~ /\A$number\z/ ) {
+				$parsed{$limit} = $parsed{$limit} + 0;
+			} else {
+				push( @errors, 'bad ' . $limit . ' for "' . $label . '"' );
+				$parsed{$limit} = undef;
+			}
+		}
+		$perfdata{$label} = \%parsed;
+	} ## end foreach my $item (@items)
+
+	return { text => join( "\n", @text_lines ), perfdata => \%perfdata, errors => \@errors };
+} ## end sub _parse_perfdata
 
 # Runs the compliance checks in name order and stores their results in
 # $self->{to_return}{data}{compliance}. Called by run after the checks.
@@ -858,7 +1017,11 @@ sub _tally_compliance {
 			if ( defined( $result->{severity} ) ) {
 				$prefix = $prefix . ' ' . $result->{severity};
 			}
-			$alert_string = $alert_string . '[' . $prefix . '] ' . $result->{output} . "\n";
+			my $output = $result->{output};
+			if ( $self->{strip_perfdata} ) {
+				$output = $self->_parse_perfdata($output)->{text};
+			}
+			$alert_string = $alert_string . '[' . $prefix . '] ' . $output . "\n";
 		}
 	} ## end foreach my $name ( sort( keys( %{ $data->{compliance} } ) ) )
 

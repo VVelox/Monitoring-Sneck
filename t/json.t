@@ -243,7 +243,7 @@ sub to_json_canonical {
     );
     like(
         $raw,
-        qr/"chk":\{"check":"[^"]*","exit":0,"output":"hi","ran":"[^"]*","run_time":"[\d.]+"\}/,
+        qr/"chk":\{"check":"[^"]*","exit":0,"output":"hi","perfdata":\{\},"ran":"[^"]*","run_time":"[\d.]+"\}/,
         'per-check keys sorted'
     );
 }

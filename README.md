@@ -357,6 +357,17 @@ Options are settings for sneck itself. Flags override them.
   Takes true and false in YAML.
   Default :: 0
 
+- `perfdata` :: If 1, the output of checks, debug checks, and compliance
+  checks is parsed for nagios style perfdata, which goes in `perfdata`
+  for each. Takes true and false in YAML.
+  Default :: 1
+
+- `strip_perfdata` :: If 1, perfdata is left out of the outputs added to
+  `.data.alertString` and `.data.compliance_alertString`. `output` for
+  each check is left as is. Works even with the `perfdata` option off.
+  Takes true and false in YAML.
+  Default :: 0
+
 Any other option is an error.
 
 ```
@@ -673,7 +684,8 @@ The generated JSON/hash is as below in jpath notation.
 - .data.errored :: Count of the number of errored checks.
 
 - .data.alertString :: The cumulative outputs of anything that
-  returned a warning, critical, or unknown.
+  returned a warning, critical, or unknown. With the `strip_perfdata`
+  option on, the perfdata is left out of them.
 
 - .data.vars :: A hash with the variables to use.
 
@@ -707,7 +719,8 @@ The generated JSON/hash is as below in jpath notation.
   are warning, critical, or unknown and not waived, each prefixed with
   the control, or the name if there is none, and the severity, such as
   `[CIS-5.2.10 high] `. Added to `.data.alertString` if the
-  `compliance_alert` option is set.
+  `compliance_alert` option is set. With the `strip_perfdata` option
+  on, the perfdata is left out of them.
 
 - .data.compliance_score :: Percent of compliance checks that are ok,
   leaving out waived ones, to two decimal places. null if there are none
@@ -745,6 +758,27 @@ For the following `$name` is the name of the check ran.
   a restart with `check_restart` set. The name of that restart. The rest
   of the results are from the rerun.
 
+- .data.checks.$name.perfdata.$label :: Only present if the `perfdata`
+  option is on. A hash for each perfdata item in the output, keyed by
+  its label, as below. Units and ranges are as given.
+
+  - value :: The number, or null if it was U.
+
+  - uom :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
+
+  - warning :: The warning range, such as 10, 10:, ~:5, or @5:10. null
+    if not given.
+
+  - critical :: The critical range, the same as warning.
+
+  - min :: The minimum. null if not given.
+
+  - max :: The maximum. null if not given.
+
+- .data.checks.$name.perfdata_error :: Only present if some of the
+  perfdata could not be parsed. Items with a bad value are left out.
+  Never changes the exit or counts.
+
 For the following `$name` is the name of the debug check ran. Debug
 checks are run the same as checks, including `check_timeout`,
 `check_timeout_signal`, and `check_kill_sub_pids`.
@@ -764,11 +798,13 @@ checks are run the same as checks, including `check_timeout`,
 
 - .data.debugs.$name.run_time :: How long it took to run the debug.
 
+- .data.debugs.$name.perfdata, perfdata_error :: The same as for checks.
+
 For the following `$name` is the name of the compliance check. They are
 run the same as checks, except `timeout` may override `check_timeout`.
 
-- .data.compliance.$name.check, ran, output, exit, error, run_time ::
-  The same as for checks. For a cached result, these are from when it
+- .data.compliance.$name.check, ran, output, exit, error, run_time,
+  perfdata, perfdata_error :: The same as for checks. For a cached result, these are from when it
   last ran.
 
 - .data.compliance.$name.last_ran :: Time since epoch of when it last

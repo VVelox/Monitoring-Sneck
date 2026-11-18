@@ -12,11 +12,11 @@ Monitoring::Sneck::Config - parses and validates sneck config files
 
 =head1 VERSION
 
-Version 1.7.0
+Version 1.8.0
 
 =cut
 
-our $VERSION = '1.7.0';
+our $VERSION = '1.8.0';
 
 =head1 SYNOPSIS
 
@@ -260,6 +260,18 @@ Default :: 1
 - compliance_alert :: If 1, compliance checks that are not ok and not
 waived also set alert and are added to alertString, the same as
 checks. Takes true and false in YAML.
+Default :: 0
+
+- perfdata :: If 1, the output of checks, debug checks, and compliance
+checks is parsed for nagios style perfdata, which goes in perfdata
+for each. See RETURN HASH in L<Monitoring::Sneck>. Takes true and
+false in YAML.
+Default :: 1
+
+- strip_perfdata :: If 1, perfdata is left out of the outputs added
+to alertString and compliance_alertString. output for each check is
+left as is. Works even with the perfdata option off. Takes true and
+false in YAML.
 Default :: 0
 
 Any other option is an error.
@@ -754,7 +766,8 @@ it is not valid. The second is undef if it is valid or a error message.
 
 The standard forms are as below.
 
-- locking, check_kill_sub_pids, compliance_alert :: 0 or 1.
+- locking, check_kill_sub_pids, compliance_alert, perfdata,
+strip_perfdata :: 0 or 1.
 
 - check_timeout :: A number.
 
@@ -779,7 +792,8 @@ sub validate_option {
 	my $label = 'option "' . $name . '"';
 
 	my %known = map { $_ => 1 }
-		( 'cache_file', 'pid_dir', 'locking', 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids', 'compliance_alert' );
+		( 'cache_file', 'pid_dir', 'locking', 'check_timeout', 'check_timeout_signal', 'check_kill_sub_pids', 'compliance_alert',
+		'perfdata', 'strip_perfdata' );
 	if ( !$known{$name} ) {
 		return ( undef, 'unknown ' . $label );
 	}
@@ -788,7 +802,8 @@ sub validate_option {
 		return ( undef, $label . ' must be a string or number' );
 	}
 
-	if ( $name eq 'locking' || $name eq 'check_kill_sub_pids' || $name eq 'compliance_alert' ) {
+	my %booleans = map { $_ => 1 } ( 'locking', 'check_kill_sub_pids', 'compliance_alert', 'perfdata', 'strip_perfdata' );
+	if ( $booleans{$name} ) {
 		if ( !defined($value) || $value !~ /^[01]?$/ ) {
 			return ( undef, $label . ' must be 0 or 1' );
 		}

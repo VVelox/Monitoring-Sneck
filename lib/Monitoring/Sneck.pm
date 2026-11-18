@@ -175,7 +175,7 @@ keyed by its label, as below. Units and ranges are as given.
 
   - value :: The number, or undef if it was U.
 
-  - uom :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
+  - unit :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
 
   - warning :: The warning range, such as 10, 10:, ~:5, or @5:10.
   undef if not given.
@@ -747,7 +747,7 @@ sub _tally_checks {
 #
 # Perfdata is anything after the first | on the first line, plus everything
 # after the first | found on any later line, through to the end. Items are
-# space separated, as 'label'=value[uom];[warn];[crit];[min];[max]. A label
+# space separated, as 'label'=value[unit];[warn];[crit];[min];[max]. A label
 # may be in single quotes to hold spaces or =, with '' for a literal quote.
 #
 # Args...
@@ -759,8 +759,8 @@ sub _tally_checks {
 #     - text :: The output with the perfdata removed, as well as spaces left
 #       before the | on each line.
 #
-#     - perfdata :: Hash ref of labels to hash refs of value, uom, warning,
-#       critical, min, and max. value is a number, or undef for U. uom is the
+#     - perfdata :: Hash ref of labels to hash refs of value, unit, warning,
+#       critical, min, and max. value is a number, or undef for U. unit is the
 #       unit as given, or ''. warning and critical are the range strings as
 #       given, such as 10:, ~:5, or @5:10. min and max are numbers. Any of
 #       warning, critical, min, or max not given are undef.
@@ -772,8 +772,8 @@ sub _tally_checks {
 #
 #     my $parsed = $self->_parse_perfdata("HTTP OK - 200 | time=0.5s;1;2;0 'page size'=512B");
 #     # $parsed is { text => 'HTTP OK - 200', errors => [], perfdata => {
-#     #     time => { value => 0.5, uom => 's', warning => '1', critical => '2', min => 0, max => undef },
-#     #     'page size' => { value => 512, uom => 'B', warning => undef, critical => undef, min => undef, max => undef } } }
+#     #     time => { value => 0.5, unit => 's', warning => '1', critical => '2', min => 0, max => undef },
+#     #     'page size' => { value => 512, unit => 'B', warning => undef, critical => undef, min => undef, max => undef } } }
 sub _parse_perfdata {
 	my ( $self, $output ) = @_;
 
@@ -811,8 +811,8 @@ sub _parse_perfdata {
 			$label =~ s/''/'/g;
 		}
 
-		my ( $value_and_uom, $warning, $critical, $min, $max ) = split( /;/, $fields );
-		my ( $value, $uom ) = ( $value_and_uom // '' ) =~ /\A($number|U)(.*)\z/;
+		my ( $value_and_unit, $warning, $critical, $min, $max ) = split( /;/, $fields );
+		my ( $value, $unit ) = ( $value_and_unit // '' ) =~ /\A($number|U)(.*)\z/;
 		if ( !defined($value) ) {
 			push( @errors, 'bad value for "' . $label . '"' );
 			next;
@@ -823,7 +823,7 @@ sub _parse_perfdata {
 
 		my %parsed = (
 			value    => $value eq 'U' ? undef : $value + 0,
-			uom      => $uom,
+			unit     => $unit,
 			warning  => $warning,
 			critical => $critical,
 			min      => $min,

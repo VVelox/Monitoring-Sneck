@@ -764,7 +764,7 @@ For the following `$name` is the name of the check ran.
 
   - value :: The number, or null if it was U.
 
-  - uom :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
+  - unit :: The unit, such as s, ms, %, B, KB, or c. Empty if none.
 
   - warning :: The warning range, such as 10, 10:, ~:5, or @5:10. null
     if not given.

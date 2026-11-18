@@ -63,8 +63,8 @@ sub output_check {
             text     => 'HTTP OK - 200',
             errors   => [],
             perfdata => {
-                time        => { value => 0.5, uom => 's', warning => '1',  critical => '2',  min => 0,     max => undef },
-                'page size' => { value => 512, uom => 'B', warning => undef, critical => undef, min => undef, max => undef },
+                time        => { value => 0.5, unit => 's', warning => '1',  critical => '2',  min => 0,     max => undef },
+                'page size' => { value => 512, unit => 'B', warning => undef, critical => undef, min => undef, max => undef },
             },
         },
         'single line with a quoted label'
@@ -81,17 +81,17 @@ sub output_check {
     is_deeply(
         $parsed->{perfdata},
         {
-            a => { value => 1,     uom => '', warning => undef,   critical => undef,  min => undef, max => undef },
-            b => { value => 2,     uom => '', warning => '@5:10', critical => '~:20', min => undef, max => undef },
-            c => { value => undef, uom => '', warning => undef,   critical => undef,  min => 0,     max => 100 },
+            a => { value => 1,     unit => '', warning => undef,   critical => undef,  min => undef, max => undef },
+            b => { value => 2,     unit => '', warning => '@5:10', critical => '~:20', min => undef, max => undef },
+            c => { value => undef, unit => '', warning => undef,   critical => undef,  min => 0,     max => 100 },
         },
         'multi line perfdata, ranges as given, and U is undef'
     );
 
     $parsed = Monitoring::Sneck->_parse_perfdata("OK | 'it''s'=-1.5e2KB 'a=b'=3c");
     is( $parsed->{perfdata}{"it's"}{value}, -150, 'escaped quote in label and exponent value' );
-    is( $parsed->{perfdata}{"it's"}{uom},   'KB', 'unit as given' );
-    is( $parsed->{perfdata}{'a=b'}{uom},    'c',  'quoted label may hold =' );
+    is( $parsed->{perfdata}{"it's"}{unit},  'KB', 'unit as given' );
+    is( $parsed->{perfdata}{'a=b'}{unit},   'c',  'quoted label may hold =' );
 
     $parsed = Monitoring::Sneck->_parse_perfdata("OK | junk bad=abc good=1;;;x dup=1 dup=2");
     is_deeply(
@@ -136,7 +136,7 @@ sub output_check {
             . '!comp||' . output_check( 1, "WARN | z=3\n" ) . "\n" );
     is_deeply(
         $data->{checks}{chk}{perfdata},
-        { time => { value => 5, uom => 's', warning => '1', critical => '2', min => undef, max => undef } },
+        { time => { value => 5, unit => 's', warning => '1', critical => '2', min => undef, max => undef } },
         'checks get perfdata by default'
     );
     is( $data->{debugs}{dbg}{perfdata}{y}{value},     1, 'debugs get perfdata' );
